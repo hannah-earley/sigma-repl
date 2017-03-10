@@ -1,5 +1,4 @@
 module Model(module Model) where
-import Numeric.Natural
 
 data Expr = Expr (Maybe String) Expr'
 data Expr' = Stop
@@ -9,43 +8,51 @@ data Expr' = Stop
            | Name String
 type Context = [Expr]
 
-instance Show Expr' where
-  show Stop = "_"
-  show (Perm xs xs') = "<pi " ++ prints xs ++ " | " ++ prints xs' ++ " pi>"
-  show (Seq xs) = "(" ++ prints xs ++ ")"
-  show (Noop xs) = printd xs
-  show (Name n) = '$' : n
 
--- helper function
-prints :: [Expr] -> String
-prints = unwords . map show
-
--- special printing sugar for datatypes...
-printd :: [Expr] -> String
-
-  -- lists
-printd [Expr (Just "Nil") _, _] = "[]"
-printd x@[Expr (Just "Cons") _, _] = "[" ++ s ++ "]"
+forward :: Expr -> Expr
+forward e@(Expr name (Seq s))
+  | unify'' s s' = e
+  | otherwise    = Expr Nothing (Seq s')
   where
-    s = unwords . printl . Expr Nothing $ Noop x
-    printl :: Expr -> [String]
-    printl (Expr _ (Noop [Expr (Just "Cons") _, Expr _ (Noop [x, y])])) = show x : printl y
-    printl (Expr _ (Noop [Expr (Just "Nil") _, _])) = []
-    printl x = [". " ++ show x]
+    p:ps = s
+    s' = forward' p ps
+    forward' p@(Expr _ (Perm xs xs')) ps = permute xs xs' ps ++ [p]
+    forward' p ps = p:ps
+forward x = x
 
-  -- numbers
-printd [Expr (Just "Zero") _, _] = "#0"
-printd [Expr (Just "Succ") _, n] = printn 1 n
+backward :: Expr -> Expr
+backward e@(Expr name (Seq s))
+  | unify'' s s' = e
+  | otherwise    = Expr Nothing (Seq s')
   where
-    printn :: Natural -> Expr -> String
-    printn m (Expr _ (Noop [Expr (Just "Zero") _, _])) = '#' : show m
-    printn m (Expr _ (Noop [Expr (Just "Succ") _, n])) = printn (m+1) n
-    printn m x = "{#" ++ show m ++ " . " ++ show x ++ "}"
+    p = last s
+    ps = init s
+    s' = backward' p ps
+    backward' p@(Expr _ (Perm xs' xs)) ps = p : permute xs xs' ps
+    backward' p ps = p:ps
+backward x = x
 
-  -- fallback
-printd xs = "{" ++ prints xs ++ "}"
+permute _ _ ps = ps
 
+-- hack : unify if names are equal, but could name two objects the same!
+-- should really introduce idea of a context/environment...
+unify (Expr (Just x) x') (Expr (Just y) y') = (x == y) || (unify' x' y')
+unify (Expr _ x) (Expr _ y) = unify' x y
 
-instance Show Expr where
-  show (Expr (Just name) _) = name
-  show (Expr Nothing expr) = show expr
+unify' Stop Stop = True
+unify' (Perm xs xs') (Perm ys ys') = (unify'' xs ys) && (unify'' xs' ys')
+unify' (Seq xs) (Seq ys) = unify'' xs ys
+unify' (Noop xs) (Noop ys) = unify'' xs ys
+unify' (Noop xs) (Seq ys) = (unify zh stop) && (unify'' xs zi) && (unify zl stop)
+  where
+    stop = Expr Nothing Stop
+    zh:zt = ys
+    zi = init zt
+    zl = last zt
+unify' x@(Seq _) y@(Noop _) = unify' y x
+unify' (Name x) (Name y) = x == y
+unify' _ _ = False
+
+unify'' (x:xs) (y:ys) = (unify x y) && unify'' xs ys
+unify'' [] [] = True
+unify'' _ _ = False
