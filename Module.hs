@@ -6,7 +6,7 @@
 module Module
 ( Scope
 , Mod
-, Aliasable
+, Aliasable(..)
 , deälias
 ) where
 
