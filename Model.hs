@@ -12,7 +12,7 @@ import Module
 import Data.Maybe
 import qualified Data.Map.Strict as Map
 
-type Expr = Expr' String
+type Expr = Expr' ID
 data Expr' a = Stop
              | Perm [Expr' a] [Expr' a]
              | Seq [Expr' a]

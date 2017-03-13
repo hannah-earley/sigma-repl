@@ -8,6 +8,7 @@ module Module
 , Mod
 , Aliasable(..)
 , deälias
+, ID
 ) where
 
 import Data.Maybe
@@ -66,49 +67,3 @@ deälias = go . iterate iter . prep
       where
         axs = aliases x
         ays = aliases y
-
-----------------------
--- test definitions --
-----------------------
-
-data Fun = Fun { fun_sig :: String
-               , fun_slots :: [ID]
-               } deriving (Show)
-
-instance Aliasable Fun where
-    type Sig Fun = String
-    type Ref Fun = ID
-    sig = fun_sig
-    slots = fun_slots
-
-
-funs = [ ("x", Fun "b" ["y", "f"])
-       , ("y", Fun "b" ["y", "g"])
-       , ("f", Fun "a" ["x", "f"])
-       , ("g", Fun "a" ["y", "f"])
-       , ("h", Fun "a" ["x", "y"])
-       , ("i", Fun "a" ["y", "h"]) ]
-
-funs' = [ ("f", Fun "a" ["g", "f"])
-        , ("g", Fun "b" ["h", "f"])
-        , ("h", Fun "b" ["h", "i"])
-        , ("i", Fun "a" ["h", "f"])
-        , ("j", Fun "a" ["g", "h"]) ]
-
-funs'' = [ ("f",Fun"a"["g","h"])
-         , ("g",Fun"a"["f","i"])
-         , ("h",Fun"b"["h","h"])
-         , ("i",Fun"b"["h","i"]) ]
-
-funs''' = [ ("1º", Fun "1" ["2º", "2p"])
-          , ("nil", Fun "1" ["cons", "2p"])
-          , ("zero", Fun "1" ["succ", "2º"])
-          , ("1p", Fun "1" ["2p", "2p"])
-
-          , ("2º", Fun "2" ["2p", "2p"])
-          , ("cons", Fun "2" ["succ", "succ"])
-          , ("succ", Fun "2" ["cons", "2º"])
-          , ("2p", Fun "2" ["2p", "2p"])
-
-          , ("f", Fun "2" ["2º", "3º"])
-          , ("3º", Fun "3" ["2p", "cons"]) ]
