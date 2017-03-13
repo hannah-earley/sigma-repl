@@ -13,7 +13,9 @@ data Expr' a = Stop
              | Seq [Expr' a]
              | Label a
              | As a (Expr' a)
-             | Ref a
+             | Ref a deriving (Eq, Ord)
+
+----
 
 instance Aliasable Expr where
     type Sig Expr = Expr' [Int]
