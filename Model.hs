@@ -1,58 +1,61 @@
-module Model(module Model) where
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 
-data Expr = Expr (Maybe String) Expr'
-data Expr' = Stop
-           | Perm [Expr] [Expr]
-           | Seq [Expr]
-           | Noop [Expr]
-           | Name String
-type Context = [Expr]
+module Model
+( Expr(..)
+, Expr'(..)
+, bruijns
+) where
 
+import Module
+import Data.Maybe
+import qualified Data.Map.Strict as Map
 
-forward :: Expr -> Expr
-forward e@(Expr name (Seq s))
-  | unify'' s s' = e
-  | otherwise    = Expr Nothing (Seq s')
+type Expr = Expr' String
+data Expr' a = Stop
+             | Perm [Expr' a] [Expr' a]
+             | Seq [Expr' a]
+             | Label a
+             | As a (Expr' a)
+             | Ref a deriving (Eq, Ord)
+
+----
+
+instance Aliasable Expr where
+    type Sig Expr = Expr' [Int]
+    type Ref Expr = String
+
+    sig = sig' Map.empty
+
+    slots Stop = []
+    slots (Label _) = []
+    slots (Perm l r) = slots' l ++ slots' r
+    slots (Seq xs) = slots' xs
+    slots (As l x) = slots x
+    slots (Ref r) = [r]
+
+slots' = concat . map slots
+
+sig' :: Ord a => Map.Map a [Int] -> Expr' a -> Expr' [Int]
+sig' _ Stop = Stop
+sig' _ (Perm l r) = Perm (map (sig' m) l) (map (sig' m) r)
+  where m = bruijns [2] (Seq r) $ bruijns [1] (Seq l) Map.empty
+sig' m (Seq x) = Seq $ map (sig' m) x
+sig' m (Label l) = Label . fromMaybe [] $ Map.lookup l m
+sig' m (As l x) = As (fromMaybe [] $ Map.lookup l m) (sig' m x)
+sig' _ (Ref _) = Ref []
+
+bruijns :: Ord a => [Int] -> Expr' a -> Map.Map a [Int] -> Map.Map a [Int]
+bruijns _ Stop m = m
+bruijns _ (Perm _ _) m = m
+bruijns pre (Seq xs) m = foldl (\m' (n, x) -> bruijns (n:pre) x m') m $ zip [1..] xs
+bruijns pre (Label l) m = Map.alter f l m
   where
-    p:ps = s
-    s' = forward' p ps
-    forward' p@(Expr _ (Perm xs xs')) ps = permute xs xs' ps ++ [p]
-    forward' p ps = p:ps
-forward x = x
-
-backward :: Expr -> Expr
-backward e@(Expr name (Seq s))
-  | unify'' s s' = e
-  | otherwise    = Expr Nothing (Seq s')
-  where
-    p = last s
-    ps = init s
-    s' = backward' p ps
-    backward' p@(Expr _ (Perm xs' xs)) ps = p : permute xs xs' ps
-    backward' p ps = p:ps
-backward x = x
-
-permute _ _ ps = ps
-
--- hack : unify if names are equal, but could name two objects the same!
--- should really introduce idea of a context/environment...
-unify (Expr (Just x) x') (Expr (Just y) y') = (x == y) || (unify' x' y')
-unify (Expr _ x) (Expr _ y) = unify' x y
-
-unify' Stop Stop = True
-unify' (Perm xs xs') (Perm ys ys') = (unify'' xs ys) && (unify'' xs' ys')
-unify' (Seq xs) (Seq ys) = unify'' xs ys
-unify' (Noop xs) (Noop ys) = unify'' xs ys
-unify' (Noop xs) (Seq ys) = (unify zh stop) && (unify'' xs zi) && (unify zl stop)
-  where
-    stop = Expr Nothing Stop
-    zh:zt = ys
-    zi = init zt
-    zl = last zt
-unify' x@(Seq _) y@(Noop _) = unify' y x
-unify' (Name x) (Name y) = x == y
-unify' _ _ = False
-
-unify'' (x:xs) (y:ys) = (unify x y) && unify'' xs ys
-unify'' [] [] = True
-unify'' _ _ = False
+    f Nothing = Just pre
+    f x@(Just _) = x
+    --f Nothing = Just [pre]
+    --f (Just x) = Just (pre:x)
+bruijns pre (As l x) m = bruijns pre x $ bruijns pre (Label l) m
+bruijns _ (Ref _) m = m
+--bruijns pre (Ref r) m = bruijns pre (Label r) m
