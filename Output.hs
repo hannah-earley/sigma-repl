@@ -1,6 +1,8 @@
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Output where
 import Numeric.Natural
-import Model
+import Model2
 
 -- structural debugging
 
@@ -9,58 +11,57 @@ class Debug a where
   debug :: a -> String
   debug = debug' 5
 
-instance Debug Expr where
-  debug' n (Expr (Just name) x) = "<" ++ name ++ ": " ++ debug' n x ++ ">"
-  debug' n (Expr Nothing x) = debug' n x
-
-instance Debug Expr' where
-  debug' _ Stop = "_"
+instance Show a => Debug (Expr' a) where
   debug' n (Perm xs xs') = "<pi " ++ debugs (n-1) xs ++ " | " ++ debugs (n-1) xs' ++ " pi>"
   debug' n (Seq xs) = "(" ++ debugs (n-1) xs ++ ")"
-  debug' n (Noop xs) = "{" ++ debugs (n-1) xs ++ "}"
-  debug' _ (Name n) = '$' : n
+  debug' n (As l x) = ('$' : show l) ++ ('@' : debug' (n-1) x)
+  debug' _ (Label l) = '$' : show l
+  debug' _ (Ref r) = show r
+  debug' _ Stop = "_"
 
-debugs :: Natural -> [Expr] -> String
+debugs :: (Show a) => Natural -> [Expr' a] -> String
 debugs n = unwords . map (debug' n)
 
 
 -- structural visualisation
 
 instance Show Expr where
-  show (Expr (Just name) _) = name
-  show (Expr Nothing expr) = show expr
-
-instance Show Expr' where
-  show Stop = "_"
   show (Perm xs xs') = "<pi " ++ prints xs ++ " | " ++ prints xs' ++ " pi>"
-  show (Seq xs) = "(" ++ prints xs ++ ")"
-  show (Noop xs) = printd xs
-  show (Name n) = '$' : n
+  show (Seq xs) = case datap xs of
+                    Left d -> printd d
+                    Right s -> "(" ++ prints s ++ ")"
+  show (As l x) = ('$' : show l) ++ ('@' : show x)
+  show (Label l) = '$' : show l
+  show (Ref r) = show r
+  show Stop = "_"
 
--- helper function
-prints :: [Expr] -> String
 prints = unwords . map show
+
+datap :: Eq a => [Expr' a] -> Either [Expr' a] [Expr' a]
+datap (Stop:xs@(_:_))
+  | last xs == Stop = Left $ init xs
+  | otherwise = Right xs
+datap xs = Right xs
 
 -- special printing sugar for datatypes...
 printd :: [Expr] -> String
 
   -- lists
-printd [Expr (Just "Nil") _, _] = "[]"
-printd x@[Expr (Just "Cons") _, _] = "[" ++ s ++ "]"
+printd [Ref "nil", Stop] = "[]"
+printd [Ref "cons", Seq [Stop, x, y, Stop]] = "[" ++ (unwords $ show x : printl y) ++ "]"
   where
-    s = unwords . printl . Expr Nothing $ Noop x
     printl :: Expr -> [String]
-    printl (Expr _ (Noop [Expr (Just "Cons") _, Expr _ (Noop [x, y])])) = show x : printl y
-    printl (Expr _ (Noop [Expr (Just "Nil") _, _])) = []
+    printl (Seq [Stop, Ref "cons", Seq [Stop, x, y, Stop], Stop]) = show x : printl y
+    printl (Seq [Stop, Ref "nil", Stop, Stop]) = []
     printl x = [". " ++ show x]
 
   -- numbers
-printd [Expr (Just "Zero") _, _] = "#0"
-printd [Expr (Just "Succ") _, n] = printn 1 n
+printd [Ref "zero", Stop] = "#0"
+printd [Ref "succ", n] = printn 1 n
   where
     printn :: Natural -> Expr -> String
-    printn m (Expr _ (Noop [Expr (Just "Zero") _, _])) = '#' : show m
-    printn m (Expr _ (Noop [Expr (Just "Succ") _, n])) = printn (m+1) n
+    printn m (Seq [Stop, Ref "zero", Stop, Stop]) = '#' : show m
+    printn m (Seq [Stop, Ref "succ", n, Stop]) = printn (m+1) n
     printn m x = "{#" ++ show m ++ " . " ++ show x ++ "}"
 
   -- fallback
