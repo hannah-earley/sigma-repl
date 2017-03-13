@@ -1,8 +1,10 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
+
 module Output where
+
 import Numeric.Natural
-import Model2
+import Model
 
 -- structural debugging
 
