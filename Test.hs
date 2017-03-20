@@ -7,6 +7,7 @@ module Test(module Test) where
 import Module
 import Model
 import Numeric.Natural
+import Data.List
 
 l = Label
 r = Ref
@@ -19,11 +20,11 @@ bot = Stop
 stp = Stop
 
 -- choices
-choice :: Natural -> Expr
+choice :: Natural -> Expr'
 choice m = Perm [pattern "f" m, l"z", l"g"]
                 [l"f", pattern "g" m, l"z"]
   where
-    pattern :: String -> Natural -> Expr
+    pattern :: String -> Natural -> Expr'
     pattern f 0 = cons (l f) (l"fs")
     pattern f n = cons (l ('f' : show n)) (pattern f (n-1))
 
@@ -39,7 +40,7 @@ primSnd = Perm
 zero = choice 0
 suc = choice 1
 
-nat :: Natural -> Expr
+nat :: Natural -> Expr'
 nat 0 = d[r"zero", stp]
 nat n = d[r"succ", nat (n-1)]
 
@@ -81,15 +82,18 @@ lib = [ ("top", top), ("bottom", bot), ("stop", stp)
 -- test deäliasing --
 ---------------------
 
-data Fun = Fun { fun_sig :: String
-               , fun_slots :: [ID]
-               } deriving (Show)
+data Fun a b = Fun { fun_sig :: a
+                 , fun_slots :: [b]
+                 } deriving (Show)
 
-instance Aliasable Fun where
-    type Sig Fun = String
-    type Ref Fun = ID
+instance Aliasable (Fun a b) where
+    type Sig (Fun a b) = a
+    type Ref (Fun a b) = b
+    type Reslot (Fun a b) c = Fun a c
+
     sig = fun_sig
     slots = fun_slots
+    reslot f (Fun s ts) = Fun s $ map f ts
 
 
 funs = [ ("x", Fun "b" ["y", "f"])
@@ -122,3 +126,30 @@ funs''' = [ ("1º", Fun "1" ["2º", "2p"])
 
           , ("f", Fun "2" ["2º", "3º"])
           , ("3º", Fun "3" ["2p", "cons"]) ]
+
+-------------------
+-- test moduling --
+-------------------
+
+f a b c = (a, Fun b c)
+x a = (a, a)
+
+foo = Module { name = 'F'
+             , exports = [x 'a', x 'c']
+             , imports = [ Module { name = 'B'
+                                  , exports = [x 'e', x 'f', x 'g', x 'h']
+                                  , imports = []
+                                  , body = [ DefGroup [x 'e', x 'f', x 'g', x 'h']
+                                                      [f 'e' 'e' syms, f 'f' 'f' syms, f 'g' 'g' syms, f 'h' 'h' syms] [] ] } ]
+             , body = [ DefGroup [x 'a', x 'b']
+                                 [ f 'a' 'a' syms, f 'b' 'b' syms, f 'c' 'c' syms, f 'd' 'd' syms ]
+                                 [ DefGroup [x 'e', x 'f'] [f 'e' 'e' syms, f 'f' 'f' syms, f 'g' 'g' syms, f 'h' 'h' syms] []
+                                 , DefGroup [x 'i', x 'j'] [f 'g' 'g' syms, f 'h' 'h' syms, f 'i' 'i' syms, f 'j' 'j' syms] [] ]
+                      , DefGroup [x 'c', x 'd']
+                                 [ f 'c' 'c' syms, f 'e' 'e' syms ]
+                                 [ DefGroup [x 'd'] [f 'd' 'd' syms, f 'e' 'e' syms] [] ] ] }
+  where
+    syms = nub $ syms' foo
+    syms' (Module _ _ _ grps) = syms'' grps
+    syms'' grps = concat $ map syms''' grps
+    syms''' (DefGroup _ xs gs) = (map fst xs) ++ syms'' gs
