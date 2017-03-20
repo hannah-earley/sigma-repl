@@ -12,10 +12,6 @@ module Module
 , Module(..)
 , Context(..)
 , CID(..)
---, collate
---, collates
---, derelativise
---, derelativises
 , compile
 ) where
 
@@ -83,11 +79,16 @@ flattens = concat . map flatten
 flatten g@(DefGroup _ ds gs) = ds ++ flattens gs
 
 
-compile m = (rs', ds')
+-- compile :: Module r e -> (Map r [CID r], [([CID r], e')], Map [CID r] Int)
+compile m = (rs', ds', grps'')
   where
     (rs, ds) = compile' [] m
     rs' = Map.map reverse rs
     ds' = map (\(n,e) -> (reverse n, reslot reverse e)) ds
+
+    grps = zip [1..] $ deälias ds'
+    grps' = map (\(n, es) -> map (,n) es) grps
+    grps'' = Map.fromList $ concat grps'
 
 -- compile' :: -> ([(r, [CID r])], [([CID r], Reslot e [CID r])])
 compile' prefix (Module name exps ims body) = (refs', defs')
@@ -99,131 +100,8 @@ compile' prefix (Module name exps ims body) = (refs', defs')
     lu n = Map.findWithDefault (CDef n : prefix') n dict
     defs' = flattens $ derelativises prefix' dict body
     refs' = Map.fromList $ map (\(a,b) -> (a, lu b)) exps
-    
-    
-    
-    
 
 
-
-{-
-flatten prefix dict g@(DefGroup _ defs subs) = 
-  where
-    dict' = foldl (\d (n, _) -> insert n (CDef n : prefix) d) dict defs
-    lookup name = case dict' !? name of
-                    Just ref -> ref
-                    Nothing -> lookup's prefix subs name
-    lookup's prefix 
-    lookup' prefix (DefGroup proms defs subs) name = 
--}
-
-
-{-
-compile :: Aliasable e => Module r e -> [([CID r], e)]
-compilec prefix ctx@(Context mod dgs) 
-compilem prefix (Module 
-compileg prefix (DefGroup 
--}
-
-{-
-compile :: Aliaable e => Module r e -> [([CID r], e)]
-compile m = toList $ compilem empty [] m
-
-compilem d p mod@(Module name exs ims body) = 
-  where
-    p' = CLib name : p
-
-    subs d = foldl subs' d ims
-    subs' d m = compilem d (CLib r : p')
-
-    defs d = foldl defs' d body
-    defs' d g = compileg d p' (Context mod []) g
-
-    exps d = foldl exs' d exs
-    exps' d (a, b) = insert d (CDef a : p) (lookup b (Context mod [])
-
-    
-    d' = foldl (\dz (r, m) -> compilem dz (CLib r : p) m) d ims
-    d'' = foldl (\dz g -> compileg dz (CGroup (map snd exs) : p) (Context mod []) g) d' body
-    d''' = foldl (\dz (a, b) -> insert dz (CDef a : p) (lookup b (Context mod []))) d'' exs
--}
-
-
-    
-    
-
-
-
-
-
-
-
-
-{-
-data Scope a = Scope { children :: [Scope a]
-                     , defs :: [(ID, a)]
-                     , promoted :: [ID]
-                     } deriving (Show)
--}
-
-{-
-type ID = String
-data Def a = Def ID a deriving Show
-data DefGroup a = DefGroup [Def a] (Scope a) deriving Show
-data Scope a = Scope [DefGroup a] deriving Show
-
-data Mod a = Mod { imports :: [Mod a]
-                 , body :: Scope a
-                 , exports :: [ID]
-                 } deriving (Show)
--}
-
--------
-
-{-
-  a weak 'zipper' to keep a record of how we've
-  walked along the scope path...
-  
-  we aren't modifying the scopes so we don't
-  need to maintain a one-hole-context, instead
-  we can just push the current scope onto our
-  scope list, and use this for locating new
-  refs
-
-  because the scope list is FILO, the first
-  place to search for defs is the head of the
-  list, then !!2, !!3, etc until we've walked
-  the entire list; then we can try to deref
-  via the module
-
-  for the record, the OHC of a scope is:
-  (Scope a,
-     Scope a,
-     [Def a],
-       ID,
-     [Def a],
-   Scope a)
- -}
-
-{-
-data Context a = Context (Mod a) [Scope a]
-
-flatten :: Aliasable a => Mod a -> [([Ref a], a)]
-
-
-
-
-
-
-locate :: Context a -> a -> Context a
--}
-
-
-{-
-data Ref a = Local a
-           | Remote a (Context a)
-           deriving Show
--}
 
 -------
 
