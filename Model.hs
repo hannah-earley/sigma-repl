@@ -5,7 +5,6 @@
 
 module Model
 ( Expr(..)
-, Expr'(..)
 , bruijns
 ) where
 
@@ -13,8 +12,6 @@ import Module
 import Data.Maybe
 import qualified Data.Map.Strict as Map
 
---type Expr = Expr' ID
-type Expr' = Expr ID
 data Expr a = Stop
             | Perm [Expr a] [Expr a]
             | Seq [Expr a]
