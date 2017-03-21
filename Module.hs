@@ -6,10 +6,10 @@
 module Module
 ( Aliasable(..)
 , deälias
-
 , Group(..)
 , CID(..)
 , compile
+, prepx
 ) where
 
 import Data.Maybe
@@ -45,13 +45,23 @@ type CRef r = [CID r]
 type CExpr e r = e (CRef r)
 type CMap e r = Map.Map (CRef r) (CExpr e r)
 
-compile :: (Ord r, Aliasable e) => Group e r -> CMap e r
-compile = collate . prep
+compile :: (Ord (Sig e), Ord r, Aliasable e) =>
+           Group e r -> (CMap e r, Map.Map (CRef r) Int)
+compile = finalise . collate . prep
+  where
+    finalise m = (m, aliases m)
+    aliases = Map.fromList . concat . zipWith (\n -> map (,n)) [0..] . deälias . Map.toList
 
 collate :: (Ord r, Aliasable e) => Group e (CRef r) -> CMap e r
 collate g = strip g . combine . subcollate $ g
 
 ---
+
+prep :: (Ord r, Aliasable e) => Group e r -> Group e (CRef r)
+prep (Group ds cs ps sb) = Group { defs = map (\(n,d) -> (wrap n, prepx d)) ds
+                                 , children = map prep cs
+                                 , promotes = map (\(m,n) -> (wrap m, wrap n)) ps
+                                 , sandbox = sb }
 
 subcollate :: (Ord r, Aliasable e) => Group e (CRef r) -> [CMap e r]
 subcollate g = foldr (\c l -> collate c : l) [entries] $ children g
@@ -80,12 +90,9 @@ strip g scope = if sandbox g then boxed else stripped
 
 ---
 
-prep :: (Ord r, Aliasable e) => Group e r -> Group e (CRef r)
-prep (Group ds cs ps sb) = Group { defs = map (\(n,d) -> (wrap n, reslot wrap d)) ds
-                                 , children = map prep cs
-                                 , promotes = map (\(m,n) -> (wrap m, wrap n)) ps
-                                 , sandbox = sb }
-                           where wrap r = [CLabel r]
+prepx :: (Aliasable e) => e r -> CExpr e r
+prepx = reslot wrap
+wrap r = [CLabel r]
 
 prefixes :: (Ord r, Aliasable e) => CID r -> CMap e r -> CMap e r
 prefixes p = mapmap (prefix p) (reslot $ prefix p)
@@ -140,7 +147,6 @@ regroup = concat . zipWith (\n -> map (,n)) [1..]
 aliases :: Ord r => [[[r]]] -> [[r]]
 aliases = sort . map sort . map (map head)
 
---deälias :: (Aliasable a, Ord (Sig a), Ord (Ref a)) => [(Ref a, a)] -> [[Ref a]]
 deälias :: (Aliasable a, Ord (Sig a), Ord r) => [(r, a r)] -> [[r]]
 deälias = go . iterate iter . prep
   where
