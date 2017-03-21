@@ -6,11 +6,8 @@
 module Module
 ( Aliasable(..)
 , deälias
-, ID
 
-, DefGroup(..)
-, Module(..)
-, Context(..)
+, Group(..)
 , CID(..)
 , compile
 ) where
@@ -19,89 +16,103 @@ import Data.Maybe
 import Data.Tuple
 import Data.List
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+
+---
+
 (!?) :: Ord k => Map.Map k a -> k -> Maybe a
 (!?) = flip Map.lookup
+mapmap :: (Ord k, Ord k') => (k -> k') -> (v -> v') -> Map.Map k v -> Map.Map k' v'
+mapmap fk fv = Map.fromList . map (\(k, v) -> (fk k, fv v)) . Map.toList
 
+---
 
-type ID = String
-
-data DefGroup r e = DefGroup { promotions :: [(r, r)]
-                             , definitions :: [(r, e)]
-                             , subgroups :: [DefGroup r e]
-                             } deriving Show
-
-data Module r e = Module { name :: r
-                         , exports :: [(r, r)]
-                         , imports :: [Module r e]
-                         , body :: [DefGroup r e]
-                         } deriving Show
-
-data Context r e = Context (Module r e) [[DefGroup r e]]
-
-data CID r = CLib r
+data CID r = CLabel r
            | CGroup Int
-           | CDef r deriving Show
+           | CUpper
+           | CError
+           deriving (Eq, Ord, Show)
 
-type CMap r = Map.Map r [CID r]
+data Group e r = Group { defs :: [(r, e r)]
+                       , children :: [Group e r]
+                       , promotes :: [(r, r)] -- (x, y) => expose x as y
+                       , sandbox :: Bool
+                       } deriving Show
 
-collates :: Ord r => [CID r] -> CMap r -> [DefGroup r e] -> CMap r
-collates prefix dict gs = foldl collates' dict (zip [1..] gs)
+---
+
+type CRef r = [CID r]
+type CExpr e r = e (CRef r)
+type CMap e r = Map.Map (CRef r) (CExpr e r)
+
+compile :: (Ord r, Aliasable e) => Group e r -> CMap e r
+compile = collate . prep
+
+collate :: (Ord r, Aliasable e) => Group e (CRef r) -> CMap e r
+collate g = strip g . combine . subcollate $ g
+
+---
+
+subcollate :: (Ord r, Aliasable e) => Group e (CRef r) -> [CMap e r]
+subcollate g = foldr (\c l -> collate c : l) [entries] $ children g
+  where entries = foldl promote (Map.fromList $ defs g) $ promotes g
+
+combine :: (Ord r, Aliasable e) => [CMap e r] -> CMap e r
+combine = foldl go Map.empty . zip [1,3..]
+  where go l (n, r) = let r' = prefixes (CGroup n) r
+                          cols = Map.keys l `intersect` Map.keys r'
+                          l' = foldl (demote (CGroup (n+1) :)) l cols
+                      in Map.union r' l'
+
+strip :: (Ord r, Aliasable e) => Group e (CRef r) -> CMap e r -> CMap e r
+strip g scope = if sandbox g then boxed else stripped
   where
-    collates' d (n, g@(DefGroup proms _ _)) = foldl go d proms
-      where
-        sd = collate (CGroup n : prefix) d g
-        go d' (a, b) = Map.alter (const $ sd !? b) a d'
+    exps = Set.fromList . exposed $ Map.keys scope
+    prms = Set.fromList . map snd $ promotes g
+    refs = Set.fromList . exposed . concat . map slots $ Map.elems scope
 
-collate :: Ord r => [CID r] -> CMap r -> DefGroup r e -> CMap r
-collate prefix dict (DefGroup _ defs subs) = fromSubs $ fromDefs dict
+    up = map (CUpper :) . Set.toList
+    precocious = up $ exps Set.\\ prms
+    unresolved = up $ refs Set.\\ (exps `Set.intersection` prms)
+
+    stripped = foldl (demote (CGroup 0 :)) scope precocious
+    boxed = foldl (demote (CError :)) stripped unresolved
+
+---
+
+prep :: (Ord r, Aliasable e) => Group e r -> Group e (CRef r)
+prep (Group ds cs ps sb) = Group { defs = map (\(n,d) -> (wrap n, reslot wrap d)) ds
+                                 , children = map prep cs
+                                 , promotes = map (\(m,n) -> (wrap m, wrap n)) ps
+                                 , sandbox = sb }
+                           where wrap r = [CLabel r]
+
+prefixes :: (Ord r, Aliasable e) => CID r -> CMap e r -> CMap e r
+prefixes p = mapmap (prefix p) (reslot $ prefix p)
+
+prefix :: CID r -> CRef r -> CRef r
+prefix _ x@(CUpper : _) = x
+prefix p x = p : x
+
+demote :: (Ord r, Aliasable e) => (CRef r -> CRef r) -> CMap e r -> CRef r -> CMap e r
+demote pf m x@(CUpper : y) = mapmap replace' (reslot replace') m
+  where replace' = replace x (pf y)
+demote _ m _ = m
+
+promote :: (Ord r, Aliasable e) => CMap e r -> (CRef r, CRef r) -> CMap e r
+promote m (x, y) = mapmap replace' (reslot replace') m
+  where replace' = replace x (CUpper : y)
+
+replace :: Eq a => a -> a -> a -> a
+replace old new val
+  | val == old = new
+  | otherwise  = val
+
+exposed :: [CRef r] -> [CRef r]
+exposed = catMaybes . map p
   where
-    fromDefs d = foldl (\d' (n, _) -> Map.insert n (CDef n : prefix) d') d defs
-    fromSubs d = collates prefix d subs
-
-
---derelativises :: [CID r] -> CMap r -> [DefGroup r e] -> [DefGroup [CID r] e]
-derelativises prefix dict gs = map derelativises' (zip [1..] gs)
-  where
-    derelativises' (n, g) = derelativise (CGroup n : prefix) dict g
-
---derelativise :: [CID r] -> CMap r -> DefGroup r e -> DefGroup [CID r] e
-derelativise prefix dict g@(DefGroup proms defs subs) =
-                            DefGroup proms' defs' subs'
-  where
-    dict' = collate prefix dict g
-    lu n = Map.findWithDefault (CDef n : prefix) n dict'
-    --proms' = map (\(a, b) -> ([CDef a], lu b)) proms
-    proms' = []
-    defs' = map (\(n, e) -> (CDef n : prefix, reslot lu e)) defs
-    subs' = derelativises prefix dict' subs
-
-flattens = concat . map flatten
-flatten g@(DefGroup _ ds gs) = ds ++ flattens gs
-
-
--- compile :: Module r e -> (Map r [CID r], [([CID r], e')], Map [CID r] Int)
-compile m = (rs', ds', grps'')
-  where
-    (rs, ds) = compile' [] m
-    rs' = Map.map reverse rs
-    ds' = map (\(n,e) -> (reverse n, reslot reverse e)) ds
-
-    grps = zip [1..] $ deälias ds'
-    grps' = map (\(n, es) -> map (,n) es) grps
-    grps'' = Map.fromList $ concat grps'
-
--- compile' :: -> ([(r, [CID r])], [([CID r], Reslot e [CID r])])
-compile' prefix (Module name exps ims body) = (refs', defs')
-  where
-    prefix' = CLib name : prefix
-    (refs, defs) = foldl combine (Map.empty, []) $ map (compile' prefix') ims
-    combine (refs, defs) (refs', defs') = (Map.union refs' refs, defs ++ defs')
-    dict = collates prefix' refs body
-    lu n = Map.findWithDefault (CDef n : prefix') n dict
-    defs' = flattens $ derelativises prefix' dict body
-    refs' = Map.fromList $ map (\(a,b) -> (a, lu b)) exps
-
-
+    p (CUpper : x) = Just x
+    p _ = Nothing
 
 -------
 

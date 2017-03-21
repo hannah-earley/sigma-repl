@@ -9,6 +9,7 @@ import Model
 import Numeric.Natural
 import Data.List
 
+type Expr' = Expr String
 l = Label
 r = Ref
 
@@ -124,7 +125,7 @@ funs''' = [ ("1º", Fun "1" ["2º", "2p"])
           , ("f", Fun "2" ["2º", "3º"])
           , ("3º", Fun "3" ["2p", "cons"]) ]
 
--------------------
+{-------------------
 -- test moduling --
 -------------------
 
@@ -150,3 +151,4 @@ foo = Module { name = 'F'
     syms' (Module _ _ _ grps) = syms'' grps
     syms'' grps = concat $ map syms''' grps
     syms''' (DefGroup _ xs gs) = (map fst xs) ++ syms'' gs
+-}
