@@ -107,12 +107,9 @@ compile' prefix (Module name exps ims body) = (refs', defs')
 
 class Aliasable a where
     type Sig a :: *
-    type Ref a :: *
-    type Reslot a b :: *
-
-    sig :: a -> Sig a
-    slots :: a -> [Ref a]
-    reslot :: Aliasable (Reslot a b) => (Ref a -> b) -> a -> Reslot a b
+    sig :: Ord b => a b -> Sig a
+    slots :: Ord b => a b -> [b]
+    reslot :: (r -> s) -> a r -> a s
 
 resolve :: Ord r => [([r], s)] -> [([r], Maybe [s])]
 resolve defs = map resolve' defs
@@ -132,7 +129,8 @@ regroup = concat . zipWith (\n -> map (,n)) [1..]
 aliases :: Ord r => [[[r]]] -> [[r]]
 aliases = sort . map sort . map (map head)
 
-deälias :: (Aliasable a, Ord (Sig a), Ord (Ref a)) => [(Ref a, a)] -> [[Ref a]]
+--deälias :: (Aliasable a, Ord (Sig a), Ord (Ref a)) => [(Ref a, a)] -> [[Ref a]]
+deälias :: (Aliasable a, Ord (Sig a), Ord r) => [(r, a r)] -> [[r]]
 deälias = go . iterate iter . prep
   where
     prep = segregate . map (\(l, f) -> (l : slots f, Just $ sig f))

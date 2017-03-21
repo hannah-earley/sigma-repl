@@ -86,11 +86,8 @@ data Fun a b = Fun { fun_sig :: a
                  , fun_slots :: [b]
                  } deriving (Show)
 
-instance Aliasable (Fun a b) where
-    type Sig (Fun a b) = a
-    type Ref (Fun a b) = b
-    type Reslot (Fun a b) c = Fun a c
-
+instance Aliasable (Fun a) where
+    type Sig (Fun a) = a
     sig = fun_sig
     slots = fun_slots
     reslot f (Fun s ts) = Fun s $ map f ts

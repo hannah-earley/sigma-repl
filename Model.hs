@@ -24,10 +24,8 @@ data Expr a = Stop
 
 ----
 
-instance Ord a => Aliasable (Expr a) where
-    type Sig (Expr a) = Expr [Int]
-    type Ref (Expr a) = a
-    type Reslot (Expr a) b = Expr b
+instance Aliasable Expr where
+    type Sig Expr = Expr [Int]
 
     sig = sig' Map.empty
 
@@ -45,7 +43,7 @@ instance Ord a => Aliasable (Expr a) where
     reslot f (Label l) = Label $ f l
     reslot f (Ref r) = Ref $ f r
 
-slots' :: (Ord a, Aliasable (Expr a)) => [Expr a] -> [Ref (Expr a)]
+slots' :: (Ord a) => [Expr a] -> [a]
 slots' = concat . map slots
 
 sig' :: Ord a => Map.Map a [Int] -> Expr a -> Expr [Int]
