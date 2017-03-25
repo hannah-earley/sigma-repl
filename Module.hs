@@ -36,7 +36,7 @@ data CID r = CLabel r
 data Group e r = Group { defs :: [(r, e r)]
                        , children :: [Group e r]
                        , promotes :: [(r, r)] -- (x, y) => expose x as y
-                       , sandbox :: Bool
+                       , ismod :: Bool
                        } deriving Show
 
 ---
@@ -62,10 +62,10 @@ collate g = strip g . combine . subcollate $ g
 ---
 
 prep :: (Ord r, Aliasable e) => Group e r -> Group e (CRef r)
-prep (Group ds cs ps sb) = Group { defs = map (\(n,d) -> (wrap n, prepx d)) ds
+prep (Group ds cs ps im) = Group { defs = map (\(n,d) -> (wrap n, prepx d)) ds
                                  , children = map prep cs
                                  , promotes = map (\(m,n) -> (wrap m, wrap n)) ps
-                                 , sandbox = sb }
+                                 , ismod = im }
 
 subcollate :: (Ord r, Aliasable e) => Group e (CRef r) -> [CMap e r]
 subcollate g = foldr (\c l -> collate c : l) [entries] $ children g
@@ -79,7 +79,7 @@ combine = foldl go Map.empty . zip [1,3..]
                       in Map.union r' l'
 
 strip :: (Ord r, Aliasable e) => Group e (CRef r) -> CMap e r -> CMap e r
-strip g scope = if sandbox g then boxed else stripped
+strip g scope = if ismod g then boxed else stripped
   where
     exps = Set.fromList . exposed $ Map.keys scope
     prms = Set.fromList . map snd $ promotes g
