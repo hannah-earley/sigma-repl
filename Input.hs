@@ -1,12 +1,21 @@
 {-# LANGUAGE MonadComprehensions #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE UndecidableInstances #-}
 
-module Input where
+module Input
+( loadprog
+, loadstr
+) where
 
 import Data.Functor
 import Control.Applicative
 import Control.Monad
+
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Numeric.Natural
+import System.IO
 
 import Model (Expr(..))
 import Module (Group(..))
@@ -133,17 +142,21 @@ escape ec ecs = do char ec
                    c <- item
                    return $ Map.findWithDefault c c ecs
 
+stresc :: Parser Char
 stresc = escape '\\' $ Map.fromList
   [('a', '\a'), ('b', '\b'), ('f', '\f'), ('n', '\n')
   ,('r', '\r'), ('t', '\t'), ('v', '\v')]
 
+strlit :: Char -> Parser String
 strlit c = let schar = stresc <||> sat (/= c)
            in bracket (char c) (many schar) (char c)
 
+litstr :: Char -> Parser String
 litstr = token . strlit
 
 --- natural number literals
 
+digit :: Parser Char
 digit = sat (\x -> '0' <= x && x <= '9')
 
 nat :: Parser Natural
@@ -154,6 +167,7 @@ nat = read <$> largest (many1 digit)
 kws = ["inherit", "inherit*", "bequeath", "group",
        "group*", "def", "def*", "perm", "perm*"]
 
+variable :: Parser ID
 variable = identifier kws
 
 labelgen :: (ID -> e) -> (ID -> m -> e) -> Parser m -> Parser e
@@ -212,11 +226,13 @@ expr = largest atom
 
 --- program terms
 
-data Term = Inherit String (Either () [(ID, ID)])
+data Term = Inherit FilePath (Either () [(ID, ID)])
           | Bequeath [(ID, ID)]
           | TermGroup [Term]
           | Define Bool (ID, ID) Expr'
           | Raw Expr'
+
+deriving instance Show Expr' => Show Term
 
 terms :: Parser [Term]
 terms = largest $ many term
@@ -260,16 +276,65 @@ terms = largest $ many term
 
 --- program translation
 
-translate :: Bool -> [Term] -> Group Expr ID
-translate sb = foldr incorp blank
-  where
-    blank = Group [] [] [] sb
-    incorp (Inherit _ _) g = g -- NOT IMPLEMENTED YET
-    incorp (Bequeath ps) g = g { promotes = ps ++ (promotes g) }
-    incorp (TermGroup h) g = g { children = h' : children g }
-      where h' = translate False h
-    incorp (Define True p@(m,n) d) g = g { promotes = p : promotes g 
-                                         , defs = (m,d) : defs g }
-    incorp (Define False (m,_) d) g = g { defs = (m,d) : defs g }
-    incorp (Raw _) g = g
+loadterms :: FilePath -> IO [Term]
+loadterms path = do c <- readFile path
+                    case runParser terms c of
+                      [(ts,"")] -> return ts
+                      _ -> error ("Syntax error in: " ++ path)
 
+translate :: Bool -> [Term] -> IO (Group Expr ID)
+translate ceil = foldr incorp (pure blank)
+  where
+    blank = Group [] [] [] ceil
+
+    incorp t g' =
+      do g <- g'
+         case t of
+           Inherit fp ps ->
+              do h <- loadprog fp
+                 let h' = case ps of
+                            Left () -> h
+                            Right ps' -> reimport h ps'
+                 return $ g { children = h' : children g }
+
+           Bequeath ps ->
+              return $ g { promotes = ps ++ promotes g }
+
+           TermGroup h ->
+              do h' <- translate False h
+                 return $ g { children = h' : children g }
+
+           Define True p@(m,n) d ->
+              return $ g { promotes = p : promotes g
+                         , defs = (m,d) : defs g }
+
+           Define False (m,_) d ->
+              return $ g { defs = (m,d) : defs g }
+
+           Raw _ -> return g
+
+    inschild c g = g { children = c : children g }
+    insprom c g = g { promotes = c : promotes g }
+    insdef c g = g { defs = c : defs g }
+
+reimport :: Group Expr ID -> [(ID,ID)] -> Group Expr ID
+reimport g ps = if null xys
+                  then g { promotes = Map.toList $ Map.map f xm }
+                  else error $ "Import error on: " ++ show xys
+  where
+    xs = Set.fromList . map snd $ promotes g
+    ys = Set.fromList . map fst $ ps
+    xys = ys `Set.difference` xs
+
+    xm = Map.fromList $ promotes g
+    ym = Map.fromList ps
+
+    f x = Map.findWithDefault x x ym
+
+loadprog :: FilePath -> IO (Group Expr ID)
+loadprog p = loadterms p >>= translate True
+
+loadstr :: String -> IO (Group Expr ID)
+loadstr s = case runParser terms s of
+              [(ts,"")] -> translate True ts
+              _ -> error "Syntax error"
