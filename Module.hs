@@ -45,12 +45,16 @@ type CRef r = [CID r]
 type CExpr e r = e (CRef r)
 type CMap e r = Map.Map (CRef r) (CExpr e r)
 
-compile :: (Ord (Sig e), Ord r, Aliasable e) =>
-           Group e r -> (CMap e r, Map.Map (CRef r) Int)
-compile = finalise . collate . prep
-  where
-    finalise m = (m, aliases m)
-    aliases = Map.fromList . concat . zipWith (\n -> map (,n)) [0..] . deälias . Map.toList
+compaliases :: (Ord (Sig e), Ord r, Aliasable e) =>
+               CMap e r -> Map.Map (CRef r) Int
+compaliases = Map.fromList . concat . zipWith (\n -> map (,n)) [0..]
+                           . deälias . Map.toList
+
+compile' :: CMap e r -> Group e r -> CMap e r
+compile' = undefined
+
+compile :: (Ord r, Aliasable e) => Group e r -> CMap e r
+compile = collate . prep
 
 collate :: (Ord r, Aliasable e) => Group e (CRef r) -> CMap e r
 collate g = strip g . combine . subcollate $ g
