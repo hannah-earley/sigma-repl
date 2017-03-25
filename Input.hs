@@ -8,6 +8,8 @@ module Input
 , loadstr
 ) where
 
+import Data.Either
+import Data.Tuple
 import Data.Functor
 import Control.Applicative
 import Control.Monad
@@ -283,53 +285,30 @@ loadterms path = do c <- readFile path
                       _ -> error ("Syntax error in: " ++ path)
 
 translate :: Bool -> [Term] -> IO (Group Expr ID)
-translate ceil = foldr incorp (pure blank)
+translate ceil = foldr incorp . pure $ Group [] [] [] ceil
   where
-    blank = Group [] [] [] ceil
-
+    inschild c g = return $ g { children = c : children g }
+    insproms ps g = return $ g { promotes = ps ++ promotes g }
+    insdef n d g = return $ g { defs = (n,d) : defs g }
+    
     incorp t g' =
       do g <- g'
          case t of
-           Inherit fp ps ->
-              do h <- loadprog fp
-                 let h' = case ps of
-                            Left () -> h
-                            Right ps' -> reimport h ps'
-                 return $ g { children = h' : children g }
-
-           Bequeath ps ->
-              return $ g { promotes = ps ++ promotes g }
-
-           TermGroup h ->
-              do h' <- translate False h
-                 return $ g { children = h' : children g }
-
-           Define True p@(m,n) d ->
-              return $ g { promotes = p : promotes g
-                         , defs = (m,d) : defs g }
-
-           Define False (m,_) d ->
-              return $ g { defs = (m,d) : defs g }
-
+           Inherit fp ps -> either (flip const) reimport ps
+                              <$> loadprog fp >>= flip inschild g
+           Bequeath ps -> insproms ps g
+           TermGroup h -> translate False h >>= flip inschild g
+           Define True p@(m,n) d -> insdef m d g >>= insproms [p]
+           Define False (m,_) d -> insdef m d g
            Raw _ -> return g
 
-    inschild c g = g { children = c : children g }
-    insprom c g = g { promotes = c : promotes g }
-    insdef c g = g { defs = c : defs g }
-
-reimport :: Group Expr ID -> [(ID,ID)] -> Group Expr ID
-reimport g ps = if null xys
-                  then g { promotes = Map.toList $ Map.map f xm }
-                  else error $ "Import error on: " ++ show xys
+reimport :: [(ID,ID)] -> Group Expr ID -> Group Expr ID
+reimport ps g = g { promotes = foldr f [] ps }
   where
-    xs = Set.fromList . map snd $ promotes g
-    ys = Set.fromList . map fst $ ps
-    xys = ys `Set.difference` xs
-
-    xm = Map.fromList $ promotes g
-    ym = Map.fromList ps
-
-    f x = Map.findWithDefault x x ym
+    xm = Map.fromList . map swap $ promotes g
+    f (m,n) qs = case Map.lookup m xm of
+                   Just l -> (l,n) : qs
+                   Nothing -> error $ "Import error on: " ++ m
 
 loadprog :: FilePath -> IO (Group Expr ID)
 loadprog p = loadterms p >>= translate True
