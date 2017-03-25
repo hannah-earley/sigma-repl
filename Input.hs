@@ -8,16 +8,21 @@ module Input
 , loadstr
 ) where
 
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import Numeric.Natural
 import Data.Either
 import Data.Tuple
+
 import Data.Functor
 import Control.Applicative
 import Control.Monad
 
-import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
-import Numeric.Natural
-import System.IO
+import System.IO (readFile)
+import System.IO.Error (isDoesNotExistError)
+import System.Directory (withCurrentDirectory)
+import System.FilePath.Posix (splitFileName, (<.>))
+import Control.Exception (tryJust)
 
 import Model (Expr(..))
 import Module (Group(..))
@@ -278,8 +283,20 @@ terms = largest $ many term
 
 --- program translation
 
+trypaths' :: FilePath -> [FilePath] -> IO String
+trypaths' f [] = error $ "couldn't open " ++ f
+trypaths' f (g:gs) =
+  do r <- tryJust (guard . isDoesNotExistError) $ readFile g
+     case r of
+       Left e -> trypaths' f gs
+       Right c -> return c
+
+trypaths :: [FilePath] -> IO String
+trypaths [] = error "no path to open"
+trypaths (f:gs) = trypaths' f (f:gs)
+
 loadterms :: FilePath -> IO [Term]
-loadterms path = do c <- readFile path
+loadterms path = do c <- trypaths [path, path <.> "sig"]
                     case runParser terms c of
                       [(ts,"")] -> return ts
                       _ -> error ("Syntax error in: " ++ path)
@@ -290,7 +307,7 @@ translate ceil = foldr incorp . pure $ Group [] [] [] ceil
     inschild c g = return $ g { children = c : children g }
     insproms ps g = return $ g { promotes = ps ++ promotes g }
     insdef n d g = return $ g { defs = (n,d) : defs g }
-    
+
     incorp t g' =
       do g <- g'
          case t of
@@ -311,7 +328,9 @@ reimport ps g = g { promotes = foldr f [] ps }
                    Nothing -> error $ "Import error on: " ++ m
 
 loadprog :: FilePath -> IO (Group Expr ID)
-loadprog p = loadterms p >>= translate True
+loadprog p = let (d,f) = splitFileName p
+             in withCurrentDirectory d $
+                  loadterms p >>= translate True
 
 loadstr :: String -> IO (Group Expr ID)
 loadstr s = case runParser terms s of
