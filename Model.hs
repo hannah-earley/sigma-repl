@@ -40,7 +40,7 @@ instance Aliasable Expr where
     reslot f (Label l) = Label $ f l
     reslot f (Ref r) = Ref $ f r
 
-slots' :: (Ord a) => [Expr a] -> [a]
+slots' :: [Expr a] -> [a]
 slots' = concat . map slots
 
 sig' :: Ord a => Map.Map a [Int] -> Expr a -> Expr [Int]

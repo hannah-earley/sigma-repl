@@ -50,8 +50,33 @@ compaliases :: (Ord (Sig e), Ord r, Aliasable e) =>
 compaliases = Map.fromList . concat . zipWith (\n -> map (,n)) [0..]
                            . deälias . Map.toList
 
-compile' :: CMap e r -> Group e r -> CMap e r
-compile' = undefined
+{-
+# incremental compilation...
+
+- takes a compiled context and a new expression group
+  and generates a new context
+
+- in theory could prepend the exposed list of the prev
+  context onto the promotions list of the new group,
+  and then run `strip g . combine`
+
+- but, this would result in very high nesting... instead
+  can replace shadowed defs with (CUpper, CGroup n, CLabel r)
+  where n is automatically calculated as 1 more than
+  the previous max n; this also makes their shadowing clearer
+
+- what about non-top defs? perhaps we could take the
+  previous max root CGroup number as the base for new
+  numbering?
+
+- also need to take previous expression contexts and
+  reslot them? alternatively, just associated a
+  context with each expression in the repl, and then
+  no need... but what if want to refer to a previous
+  expression?
+-}
+incompile :: CMap e r -> Group e r -> CMap e r
+incompile = undefined
 
 compile :: (Ord r, Aliasable e) => Group e r -> CMap e r
 compile = collate . prep
@@ -130,7 +155,7 @@ exposed = catMaybes . map p
 class Aliasable a where
     type Sig a :: *
     sig :: Ord b => a b -> Sig a
-    slots :: Ord b => a b -> [b]
+    slots :: a b -> [b]
     reslot :: (r -> s) -> a r -> a s
 
 resolve :: Ord r => [([r], s)] -> [([r], Maybe [s])]

@@ -1,5 +1,6 @@
 module Main where
 import Module
+import Module2
 import Model
 import Output
 import Input
