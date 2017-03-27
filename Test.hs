@@ -9,7 +9,7 @@ import Model
 import Numeric.Natural
 import Data.List
 
-type Expr' = Expr String
+type Expr' = Expr String String
 l = Label
 r = Ref
 
