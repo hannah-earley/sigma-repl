@@ -4,6 +4,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Module
 ( Aliasable(..)
@@ -28,7 +30,7 @@ import qualified Data.Map.Strict as M
 
 class Aliasable a where
     type Sig a :: *
-    sig :: Ord b => a b -> Sig a
+    sig :: a b -> Sig a
     slots :: a b -> [b]
     reslot :: (r -> s) -> a r -> a s
 
@@ -71,6 +73,8 @@ data Group e r = Group { defs :: [(r, e r)]
 
 data Context e r = Context { symbols :: Map (r, Int) (e (r, Int))
                            , exposed :: Map r (r, Int) }
+
+deriving instance (Show r, Show (e (r, Int))) => Show (Context e r)
 
 data CtxTemp e r = CtxTemp { syms :: Map (r, Int) (e (r, Maybe Int))
                            , expd :: Map r (r, Int) }
@@ -138,8 +142,8 @@ combine c (n', c') = let reexps = keys $ expd c `intersection` expd c'
 --- compilation helper functions
 
 prep :: AOS e r => Int -> Group e r -> TempContext e r
-prep n g = safeFromList (cecf "definition") (map (wrapDef n) $ defs g) >>=
-             \ss -> return (n + 1, CtxTemp ss $ expSyms ss)
+prep n g = safeFromList (cecf "definition" . map fst) (map (wrapDef n) $ defs g)
+             >>= \ss -> return (n + 1, CtxTemp ss $ expSyms ss)
 
 reexport :: (Ord r, Show r) => [(r,r)] -> (Int, CtxTemp e r) -> TempContext e r
 reexport ps (n, c) = shadow ps (expd c) >>= safeFromList (cecf "export")
@@ -169,7 +173,7 @@ cerr :: String -> CtxMaybe a
 cerr = Left . ("Compilation error: " ++)
 
 cecf :: Show t => String -> t -> CtxMaybe a
-cecf t = cerr . (++) ("competing " ++ t ++ "(s) for :") . show
+cecf t = cerr . (++) ("competing " ++ t ++ "(s) for: ") . show
 
 expSyms = fromList . map (\s -> (fst s, s)) . keys
 wrapDef n (s, d) = ((s, n), reslot (\r -> (r, Nothing)) d)
@@ -177,7 +181,7 @@ wrapSym (s, n) = (s, Just n)
 unwrapSym (s, Just n) = (s, n)
 
 excesses :: Ord a => [a] -> [a]
-excesses = map head . filter ((<= 1) . length) . group . sort
+excesses = map head . filter ((> 1) . length) . group . sort
 
 safeFromList :: Ord k => ([k] -> CtxMaybe (Map k v)) -> [(k,v)] -> CtxMaybe (Map k v)
 safeFromList errf kvs = let zs = excesses $ map fst kvs

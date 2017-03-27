@@ -188,7 +188,7 @@ env n p = brack "()" $ symbol n >> p
 
 --- sigma expressions
 
-type Expr' = Expr ID
+type Expr' = Expr ID ID
 
 expr :: Parser Expr'
 expr = largest atom
@@ -283,6 +283,8 @@ terms = largest $ many term
 
 --- program translation
 
+type ExprGroup = Group (Expr ID) ID
+
 trypaths :: [FilePath] -> IO String
 trypaths [] = error "no path to open"
 trypaths fs@(f:_) = foldr go (error $ "couldn't open" ++ f) fs
@@ -296,7 +298,7 @@ loadterms path = do c <- trypaths [path, path <.> "sig"]
                       [(ts,"")] -> return ts
                       _ -> error ("Syntax error in: " ++ path)
 
-translate :: Bool -> [Term] -> IO (Group Expr ID)
+translate :: Bool -> [Term] -> IO ExprGroup
 translate ceil = foldr incorp . pure $ Group [] [] [] ceil
   where
     inschild c g = return $ g { children = c : children g }
@@ -314,7 +316,7 @@ translate ceil = foldr incorp . pure $ Group [] [] [] ceil
            Define False (m,_) d -> insdef m d g
            Raw _ -> return g
 
-reimport :: [(ID,ID)] -> Group Expr ID -> Group Expr ID
+reimport :: [(ID,ID)] -> ExprGroup -> ExprGroup
 reimport ps g = g { promotes = foldr f [] ps }
   where
     xm = Map.fromList . map swap $ promotes g
@@ -322,12 +324,12 @@ reimport ps g = g { promotes = foldr f [] ps }
                    Just l -> (l,n) : qs
                    Nothing -> error $ "Import error on: " ++ m
 
-loadprog :: FilePath -> IO (Group Expr ID)
+loadprog :: FilePath -> IO ExprGroup
 loadprog p = let (d,f) = splitFileName p
              in withCurrentDirectory d $
                   loadterms p >>= translate True
 
-loadstr :: String -> IO (Group Expr ID)
+loadstr :: String -> IO ExprGroup
 loadstr s = case runParser terms s of
               [(ts,"")] -> translate True ts
               _ -> error "Syntax error"
