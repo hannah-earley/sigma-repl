@@ -22,7 +22,7 @@ import System.IO (readFile)
 import System.IO.Error (isDoesNotExistError)
 import System.Directory (withCurrentDirectory)
 import System.FilePath.Posix (splitFileName, (<.>))
-import Control.Exception (tryJust)
+import Control.Exception (catchJust)
 
 import Model (Expr(..))
 import Module (Group(..))
@@ -250,7 +250,7 @@ terms = largest $ many term
     atom = inherit <||> bequeath <||> group <||> def <||> raw
 
     inherit = all <||> some
-      where 
+      where
         all = env "inherit*" $ flip Inherit (Left ()) <$> path
         some = env "inherit" $
             liftM2 Inherit path (Right <$> many promoter)
@@ -283,17 +283,12 @@ terms = largest $ many term
 
 --- program translation
 
-trypaths' :: FilePath -> [FilePath] -> IO String
-trypaths' f [] = error $ "couldn't open " ++ f
-trypaths' f (g:gs) =
-  do r <- tryJust (guard . isDoesNotExistError) $ readFile g
-     case r of
-       Left e -> trypaths' f gs
-       Right c -> return c
-
 trypaths :: [FilePath] -> IO String
 trypaths [] = error "no path to open"
-trypaths (f:gs) = trypaths' f (f:gs)
+trypaths fs@(f:_) = foldr go (error $ "couldn't open" ++ f) fs
+  where
+    go fp z = catchJust err (readFile fp) (const z)
+    err = guard . isDoesNotExistError
 
 loadterms :: FilePath -> IO [Term]
 loadterms path = do c <- trypaths [path, path <.> "sig"]
