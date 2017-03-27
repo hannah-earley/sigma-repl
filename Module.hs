@@ -2,155 +2,29 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
 
 module Module
 ( Aliasable(..)
 , deälias
-, Group(..)
-, CID(..)
 , compile
-, prepx
+, incompile
+, contextualise
+, Context(..)
+, CtxException
+, Group(..)
 ) where
 
-import Data.Maybe
-import Data.Tuple
-import Data.List
-import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
+import Data.Maybe (isNothing, isJust, catMaybes)
+import Data.List (group, filter, sort, nub, foldl', partition)
+import Data.Map.Strict (Map, union, keys, elems, intersection, fromList)
+import qualified Data.Map.Strict as M
 
----
+(!?) :: Ord k => Map k a -> k -> Maybe a
+(!?) = flip M.lookup
 
-(!?) :: Ord k => Map.Map k a -> k -> Maybe a
-(!?) = flip Map.lookup
-mapmap :: (Ord k, Ord k') => (k -> k') -> (v -> v') -> Map.Map k v -> Map.Map k' v'
-mapmap fk fv = Map.fromList . map (\(k, v) -> (fk k, fv v)) . Map.toList
-
----
-
-data CID r = CLabel r
-           | CGroup Int
-           | CUpper
-           | CError
-           deriving (Eq, Ord, Show)
-
-data Group e r = Group { defs :: [(r, e r)]
-                       , children :: [Group e r]
-                       , promotes :: [(r, r)] -- (x, y) => expose x as y
-                       , ismod :: Bool
-                       } deriving Show
-
----
-
-type CRef r = [CID r]
-type CExpr e r = e (CRef r)
-type CMap e r = Map.Map (CRef r) (CExpr e r)
-
-compaliases :: (Ord (Sig e), Ord r, Aliasable e) =>
-               CMap e r -> Map.Map (CRef r) Int
-compaliases = Map.fromList . concat . zipWith (\n -> map (,n)) [0..]
-                           . deälias . Map.toList
-
-{-
-# incremental compilation...
-
-- takes a compiled context and a new expression group
-  and generates a new context
-
-- in theory could prepend the exposed list of the prev
-  context onto the promotions list of the new group,
-  and then run `strip g . combine`
-
-- but, this would result in very high nesting... instead
-  can replace shadowed defs with (CUpper, CGroup n, CLabel r)
-  where n is automatically calculated as 1 more than
-  the previous max n; this also makes their shadowing clearer
-
-- what about non-top defs? perhaps we could take the
-  previous max root CGroup number as the base for new
-  numbering?
-
-- also need to take previous expression contexts and
-  reslot them? alternatively, just associated a
-  context with each expression in the repl, and then
-  no need... but what if want to refer to a previous
-  expression?
--}
-incompile :: CMap e r -> Group e r -> CMap e r
-incompile = undefined
-
-compile :: (Ord r, Aliasable e) => Group e r -> CMap e r
-compile = collate . prep
-
-collate :: (Ord r, Aliasable e) => Group e (CRef r) -> CMap e r
-collate g = strip g . combine . subcollate $ g
-
----
-
-prep :: (Ord r, Aliasable e) => Group e r -> Group e (CRef r)
-prep (Group ds cs ps im) = Group { defs = map (\(n,d) -> (wrap n, prepx d)) ds
-                                 , children = map prep cs
-                                 , promotes = map (\(m,n) -> (wrap m, wrap n)) ps
-                                 , ismod = im }
-
-subcollate :: (Ord r, Aliasable e) => Group e (CRef r) -> [CMap e r]
-subcollate g = foldr (\c l -> collate c : l) [entries] $ children g
-  where entries = foldl promote (Map.fromList $ defs g) $ promotes g
-
-combine :: (Ord r, Aliasable e) => [CMap e r] -> CMap e r
-combine = foldl go Map.empty . zip [1,3..]
-  where go l (n, r) = let r' = prefixes (CGroup n) r
-                          cols = Map.keys l `intersect` Map.keys r'
-                          l' = foldl (demote (CGroup (n+1) :)) l cols
-                      in Map.union r' l'
-
-strip :: (Ord r, Aliasable e) => Group e (CRef r) -> CMap e r -> CMap e r
-strip g scope = if ismod g then boxed else stripped
-  where
-    exps = Set.fromList . exposed $ Map.keys scope
-    prms = Set.fromList . map snd $ promotes g
-    refs = Set.fromList . exposed . concat . map slots $ Map.elems scope
-
-    up = map (CUpper :) . Set.toList
-    precocious = up $ exps Set.\\ prms
-    unresolved = up $ refs Set.\\ (exps `Set.intersection` prms)
-
-    stripped = foldl (demote (CGroup 0 :)) scope precocious
-    boxed = foldl (demote (CError :)) stripped unresolved
-
----
-
-prepx :: (Aliasable e) => e r -> CExpr e r
-prepx = reslot wrap
-wrap r = [CLabel r]
-
-prefixes :: (Ord r, Aliasable e) => CID r -> CMap e r -> CMap e r
-prefixes p = mapmap (prefix p) (reslot $ prefix p)
-
-prefix :: CID r -> CRef r -> CRef r
-prefix _ x@(CUpper : _) = x
-prefix p x = p : x
-
-demote :: (Ord r, Aliasable e) => (CRef r -> CRef r) -> CMap e r -> CRef r -> CMap e r
-demote pf m x@(CUpper : y) = mapmap replace' (reslot replace') m
-  where replace' = replace x (pf y)
-demote _ m _ = m
-
-promote :: (Ord r, Aliasable e) => CMap e r -> (CRef r, CRef r) -> CMap e r
-promote m (x, y) = mapmap replace' (reslot replace') m
-  where replace' = replace x (CUpper : y)
-
-replace :: Eq a => a -> a -> a -> a
-replace old new val
-  | val == old = new
-  | otherwise  = val
-
-exposed :: [CRef r] -> [CRef r]
-exposed = catMaybes . map p
-  where
-    p (CUpper : x) = Just x
-    p _ = Nothing
-
--------
+--- deäliasing machinery
 
 class Aliasable a where
     type Sig a :: *
@@ -158,16 +32,16 @@ class Aliasable a where
     slots :: a b -> [b]
     reslot :: (r -> s) -> a r -> a s
 
-resolve :: Ord r => [([r], s)] -> [([r], Maybe [s])]
-resolve defs = map resolve' defs
+resig :: Ord r => [([r], s)] -> [([r], Maybe [s])]
+resig defs = map resig' defs
   where
-    m = Map.fromList $ map (\(l:_, s) -> (l, s)) defs
-    resolve' (rs, s) = (rs, sequence $ map (m !?) rs)
+    m = fromList $ map (\(l:_, s) -> (l, s)) defs
+    resig' (rs, _) = (rs, sequence $ map (m !?) rs)
 
 segregate :: Ord ss => [(rs, Maybe ss)] -> [[rs]]
 segregate rs = map snd ok ++ (concat $ map (map (:[]) . snd) error)
   where
-    grouped = Map.toList . Map.fromListWith (++) $ map (\(x,y) -> (y,[x])) rs
+    grouped = M.toList . M.fromListWith (++) $ map (\(x,y) -> (y,[x])) rs
     (ok, error) = partition (isJust . fst) grouped
 
 regroup :: [[[r]]] -> [([r], Int)]
@@ -176,14 +50,140 @@ regroup = concat . zipWith (\n -> map (,n)) [1..]
 aliases :: Ord r => [[[r]]] -> [[r]]
 aliases = sort . map sort . map (map head)
 
+converge :: (a -> a -> Bool) -> [a] -> a
+converge p (x:ys@(y:_))
+    | p x y     = y
+    | otherwise = converge p ys
+
 deälias :: (Aliasable a, Ord (Sig a), Ord r) => [(r, a r)] -> [[r]]
-deälias = go . iterate iter . prep
+deälias = converge (==) . map aliases . iterate iter . prep
   where
     prep = segregate . map (\(l, f) -> (l : slots f, Just $ sig f))
-    iter = segregate . resolve . regroup
-    go (x:(ys@(y:_)))
-      | axs == ays = ays
-      | otherwise  = go ys
-      where
-        axs = aliases x
-        ays = aliases y
+    iter = segregate . resig . regroup
+
+--- type definitions
+
+data Group e r = Group { defs :: [(r, e r)]
+                       , children :: [Group e r]
+                       , promotes :: [(r, r)] -- (x, y) => expose x as y
+                       , ismod :: Bool
+                       } deriving Show
+
+data Context e r = Context { symbols :: Map (r, Int) (e (r, Int))
+                           , exposed :: Map r (r, Int) }
+
+data CtxTemp e r = CtxTemp { syms :: Map (r, Int) (e (r, Maybe Int))
+                           , expd :: Map r (r, Int) }
+
+type CtxException = String
+
+type CtxMaybe = Either CtxException
+
+type TempContext e r = CtxMaybe (Int, CtxTemp e r)
+
+type AOS e r = (Aliasable e, Ord r, Show r)
+
+--- public functions
+
+compile :: AOS e r => Group e r -> CtxMaybe (Context e r)
+compile g = toContext . snd <$> compile' 0 g
+
+incompile :: AOS e r => Context e r -> Group e r -> CtxMaybe (Context e r)
+incompile c g = fromContext c >>= collate g >>= cap >>= return . toContext . snd
+
+contextualise :: AOS e r => Context e r -> e r -> CtxMaybe (e (r, Int))
+contextualise c e = let e' = reslot (resolutionMap (exposed c) . (,Nothing)) e
+                    in if Nothing `elem` (map snd $ slots e')
+                       then err . show . notfound $ slots e'
+                       else Right $ reslot unwrapSym e'
+  where err = Left . (++) "Evaluation error: couldn't resolve symbol(s): "
+
+--- conversion functions
+
+fromContext :: Aliasable e => Context e r -> TempContext e r
+fromContext c = let c' = CtxTemp { syms = M.map (reslot wrapSym) $ symbols c
+                                 , expd = exposed c }
+                in return (safeNum c', c')
+
+toContext :: Aliasable e => CtxTemp e r -> Context e r
+toContext c = Context { symbols = M.map (reslot unwrapSym) $ syms c
+                      , exposed = expd c }
+
+safeNum :: Aliasable e => CtxTemp e r -> Int
+safeNum c = succ . foldl' max 0 $ se c ++ ss c ++ sd c
+  where
+    se = map snd . elems . expd
+    ss = map snd . keys . syms
+    sd = catMaybes . map snd . concat . map slots . elems . syms
+
+--- main compilation logic
+
+compile' :: AOS e r => Int -> Group e r -> TempContext e r
+compile' n g = foldr f (prep n g) (children g) >>= res
+                >>= reexport (promotes g) >>= shine
+  where
+    f x z = z >>= collate x
+    shine = if ismod g then cap else return
+    res (n, c) = return (n, resolve c)
+
+collate :: AOS e r => Group e r -> (Int, CtxTemp e r) -> TempContext e r
+collate g (n, c) = compile' n g >>= combine c
+
+combine :: (Ord r, Show r) => CtxTemp e r -> (Int, CtxTemp e r) -> TempContext e r
+combine c (n', c') = let reexps = keys $ expd c `intersection` expd c'
+                     in if not $ null reexps then cecf "import" reexps
+                        else return (n', CtxTemp (syms c `union` syms c')
+                                                 (expd c `union` expd c'))
+
+--- compilation helper functions
+
+prep :: AOS e r => Int -> Group e r -> TempContext e r
+prep n g = safeFromList (cecf "definition") (map (wrapDef n) $ defs g) >>=
+             \ss -> return (n + 1, CtxTemp ss $ expSyms ss)
+
+reexport :: (Ord r, Show r) => [(r,r)] -> (Int, CtxTemp e r) -> TempContext e r
+reexport ps (n, c) = shadow ps (expd c) >>= safeFromList (cecf "export")
+                                        >>= \e -> return (n, c { expd = e })
+
+resolutionMap :: Ord r => Map r (r, Int) -> (r, Maybe Int) -> (r, Maybe Int)
+resolutionMap e l@(s, Nothing) = maybe l wrapSym (M.lookup s e)
+resolutionMap _ l = l
+
+resolve :: (Aliasable e, Ord r) => CtxTemp e r -> CtxTemp e r
+resolve c = c { syms = M.map (reslot . resolutionMap $ expd c) (syms c) }
+
+cap :: AOS e r => (Int, CtxTemp e r) -> TempContext e r
+cap (n, c) = (n,) <$> let u = notfound . concat . map slots . elems $ syms c
+                      in if null u then return c else cerr $ msg ++ show u
+  where msg = "couldn't resolve symbol(s): "
+
+shadow :: (Show r, Ord r) => [(r,r)] -> Map r (r, Int) -> CtxMaybe [(r, (r, Int))]
+shadow [] _         = Right []
+shadow ((x,y):rs) m = case M.lookup x m of
+                        Just z  -> shadow rs m >>= return . (:) (y,z)
+                        Nothing -> cerr $ "Can't find symbol to export: " ++ show x
+
+--- exceptional and miscellaneous helper functions
+
+cerr :: String -> CtxMaybe a
+cerr = Left . ("Compilation error: " ++)
+
+cecf :: Show t => String -> t -> CtxMaybe a
+cecf t = cerr . (++) ("competing " ++ t ++ "(s) for :") . show
+
+expSyms = fromList . map (\s -> (fst s, s)) . keys
+wrapDef n (s, d) = ((s, n), reslot (\r -> (r, Nothing)) d)
+wrapSym (s, n) = (s, Just n)
+unwrapSym (s, Just n) = (s, n)
+
+excesses :: Ord a => [a] -> [a]
+excesses = map head . filter ((<= 1) . length) . group . sort
+
+safeFromList :: Ord k => ([k] -> CtxMaybe (Map k v)) -> [(k,v)] -> CtxMaybe (Map k v)
+safeFromList errf kvs = let zs = excesses $ map fst kvs
+                        in case zs of
+                             [] -> Right $ fromList kvs
+                             _  -> errf zs
+
+notfound :: Ord a => [(a, Maybe b)] -> [a]
+notfound = nub . map fst . filter (isNothing . snd)
