@@ -6,7 +6,10 @@
 
 module Model
 ( Expr(..)
+, Direction(..)
 , bruijns
+, eval
+, step
 ) where
 
 import Module
@@ -125,7 +128,6 @@ terminus _ _          = True
 terminated :: Ord r => Context (Expr l) r -> Direction -> Expr l (r, Int) -> Bool
 terminated c d (As _ e) = terminated c d e
 terminated c d (Ref r) = maybe True (terminated c d) $ fetch c r
-terminated _ _ (Seq []) = True
 terminated c Down (Seq (x : _)) = terminus c x
 terminated c Up (Seq s@(_ : _)) = terminus c $ last s
 terminated _ _ _ = True
@@ -164,13 +166,6 @@ overcome this limitation?
 -}
 
 
-{-data Expr l a = Stop
-              | Perm [Expr l a] [Expr l a]
-              | Seq [Expr l a]
-              | Label l
-              | As l (Expr l a)
-              | Ref a deriving (Eq, Ord)-}
-
 -- short-circuiting
 eval' :: x ~ (Maybe Int, Expression) => Ctx -> Direction -> x -> x
 eval' c d x@(n, e)
@@ -184,7 +179,17 @@ eval'' c d x@(n, Ref r) = maybe x go $ fetch c r
   where
     go = (As ("`" ++ fst r ++ suffix) <$>) . eval' c d . (pred <$> n,)
     suffix = if disambiguate c (fst r) == Just r then "" else '_' : show (snd r)
-eval'' c d (n, Seq s@(_:_)) = error "unimplemented"
+eval'' c Down (n, Seq s'@(p:s)) = (pred <$> n,) $
+  case reduce c p of
+    Perm l r -> maybe (Seq s') (subs r) $ unify c (Seq l) (Seq s)
+    _ -> Seq s'
+  where subs r m = let Seq t = substitute m (Seq r) in Seq (t ++ [p])
+eval'' c Up (n, Seq s'@(_:_)) = (pred <$> n,) $
+  let (p,s) = (last s', init s')
+      subs l m = let Seq t = substitute m (Seq l) in Seq (p:t)
+  in case reduce c p of
+       Perm l r -> maybe (Seq s') (subs l) $ unify c (Seq r) (Seq s)
+       _ -> Seq s'
 eval'' _ _ (n, e) = (Just (-1), e)
   -- shouldn't get here, as these expressions should be `terminated`
 
@@ -193,41 +198,52 @@ eval n c d = snd . eval' c d . (n,)
 
 step :: Ctx -> Direction -> Expression -> Expression
 step c = eval (Just 1) c
--- step c d (As l e) = As l . step c d $ e
--- step c d (Ref r) = fromMaybe (Ref r) . As ('`' : fst r) . step c d $ fetch c r
--- step c d 
--- step _ _ e = e
 
--- unify :: Ctx -> Expression -> Expression -> Bool
+equivify :: m ~ Map ID Expression => m -> Ctx -> Expression -> Expression -> Maybe m
+equivify m c e e' = if equivalentp c e e' then Just m else Nothing
 
--- unify = undefined
+reduce = reduce' 100
 
-equivalent :: Ctx -> Expression -> Expression -> Bool
---equivalent c 
-equivalent _ _ _ = False
+reduce' :: Int -> Ctx -> Expression -> Expression
+reduce' n _ e | n <= 0 = e
+reduce' n c (As l e) = reduce' (n-1) c e
+reduce' n c (Ref r) = maybe (Ref r) (reduce' (n-1) c) $ fetch c r
+reduce' _ _ e = e
 
-unify :: m ~ Map ID Expression => Ctx -> m -> Expression -> Expression -> Maybe m
-unify c m e (As _ f) = unify c m e f
-unify c m e (Ref r) = fetch c r >>= unify c m e
+unify = unify' M.empty
 
-unify _ m Stop Stop = Just m
+unify' :: m ~ Map ID Expression => m -> Ctx -> Expression -> Expression -> Maybe m
+-- unify c m e (As _ f) = unify c m e f
+-- unify c m e (Ref r) = fetch c r >>= unify c m e
 
-unify _ m (Perm p p') (Perm q q') = error "unimplemented"
+--unify c m Stop e = unify' c m Stop e Just m
 
-unify c m (Seq (x:xs)) (Seq (y:ys)) = do m' <- unify c m x y
-                                         unify c m' (Seq xs) (Seq ys)
-unify c m (Seq []) (Seq []) = Just m
+--unify c m p@(Perm _ _) q@(Perm _ _) = unify' c m p q
 
---unify c m (Label l) e = 
+unify' m c (Seq (x:xs)) (Seq (y:ys)) = do m' <- unify' m c x y
+                                          unify' m' c (Seq xs) (Seq ys)
+unify' m _ (Seq []) (Seq []) = Just m
 
--- unify c m (Seq s) (Seq t)
---   | length s == length t = foldM (\m -> uncurry $ unify c m) m $ zip s t
---   | otherwise = Nothing
+unify' _ _ (Seq _) (Seq _) = Nothing
 
-unify _ _ _ _ = Nothing
+unify' m c s@(Seq _) e = unify' m c s $ reduce c e
 
-instructure :: Ctx -> Map ID Expression -> Expression -> Expression
-instructure = undefined
+unify' m c (Label l) e = case M.lookup l m of
+                           Nothing -> Just (M.insert l e m)
+                           Just e' -> equivify m c e e'
+
+unify' m c (As l e) e' = do m' <- unify' m c (Label l) e'
+                            unify' m' c e e'
+
+--unify c m r@(Ref _) e = unify' c m r e
+
+unify' m c e e' = equivify m c e e'
+
+substitute :: Map ID Expression -> Expression -> Expression
+substitute m (Label l) = M.findWithDefault (Label l) l m
+substitute m (As l e) = M.findWithDefault (substitute m e) l m
+substitute m (Seq s) = Seq $ map (substitute m) s
+substitute _ e = e
 
 
 
