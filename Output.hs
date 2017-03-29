@@ -42,9 +42,9 @@ prints :: (Eq a, Eq b, Show a, Show b) => [Expr a b] -> String
 prints = unwords . map show
 
 datap :: (Eq a, Eq b) => [Expr a b] -> Either [Expr a b] [Expr a b]
-datap (Stop:xs@(_:_))
+datap xs'@(Stop:xs@(_:_))
   | last xs == Stop = Left $ init xs
-  | otherwise = Right xs
+  | otherwise = Right xs'
 datap xs = Right xs
 
 -- special printing sugar for datatypes...

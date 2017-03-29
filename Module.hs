@@ -10,10 +10,6 @@
 
 module Module
 ( Aliasable(..)
-, aliasLookup
-, groupAliases
-, resolveSlotSlots
-, fromList
 , aliasig
 , compile
 , incompile
@@ -71,37 +67,7 @@ groupAliases = converge (==) . map aliases . iterate iter . prep
     prep = segregate . map (\(l, f) -> (l : slots f, Just $ sig f))
     iter = segregate . resig . regroup
 
----
-
--- aliasMap :: (Aliasable a, Ord (Sig a), Ord r) => Map r (a r) -> Map r Int
--- aliasMap = fromList . regroup . groupAliases . M.toList . resolveSlotSlots
-
-
--- aliasMap = aliasMap' . partition (isJust . slotp . snd) . M.toList
-
--- aliasMap' :: forall a r. (Aliasable a, Ord (Sig a), Ord r) =>
---              ([(r, a r)], [(r, a r)]) -> Map r Int
--- aliasMap' (slots, nonslots) = merge (succ . foldr (+) 0 $ elems gmap)
---                                   . fromList . catMaybes
---                                   . map (\(r,s) -> (r,) <$> slotp s)
---                                   $ slots
---   where
---     gmap :: Map r Int
---     gmap = fromList . regroup . groupAliases $ nonslots
-
---     resolve :: Int -> r -> Map r r -> (Int, [r], Map r r)
---     resolve n r m = case M.lookup r m of
---                       Nothing -> (M.findWithDefault n r gmap, [r], m)
---                       Just s -> let (n', rs, m') = resolve n s $ M.delete r m
---                                 in (n', r:rs, m')
-
---     merge :: Int -> Map r r -> Map r Int
---     merge n m = case keys m of
---                   [] -> gmap
---                   r:_ -> let (n', rs, m') = resolve n r m
---                          in (fromList $ map (,n') rs) `union` merge (n+1) m'
-
-
+--- todo - make clearer?
 
 resolveSlotSlots :: (Aliasable a, Ord r) => Map r (a r) -> Map r (a r)
 resolveSlotSlots syms = let (rm,dm) = until (M.null . aliens . fst)
@@ -114,63 +80,9 @@ resolveSlotSlots syms = let (rm,dm) = until (M.null . aliens . fst)
                          Just r -> (M.insert s (r,e) rm, dm)
     aliens rm = (M.fromList . map (\(s,(r,e)) -> (r,(s,e))) . M.toList $ rm) `M.difference` rm
     transfer r (s,e) (rm,dm) = (M.delete s rm, M.insert s (maybe e id $ M.lookup r dm) dm)
-    --(refs, defs) = partition (isJust . slotp . snd) . M.toList $ m
 
-    -- (refs, defs) = M.foldrWithKey part (M.empty, M.empty) syms
-    --part :: Ord r => r -> a r -> (Map r (r, a r), Map r (a r)) -> (Map r (r, a r), Map r (a r))
-
-
-    -- transfer' (rm,dm) rm' = M.foldr transfer (rm,dm) rm'
-
-    -- (rm, dm) = until (M.null . aliens . fst) (\(rm,dm) -> M.foldrWithKey transfer (rm,dm) $ aliens rm) (refs, defs)
-
-
-    -- (rm, dm) = M.foldr bar (M.empty, M.empty) m
-    -- bar (r, d) (rm, dm) = case slotp d of
-    --                         Nothing -> (rm, M.insert r d dm)
-    --                         Just s -> (M.insert r (d,s) rm, dm)
-
-    -- foo rm dm = go (rm, dm)
-    --   where
-    --     go (rm,dm) = let rm' = baz rm
-    --                  in if M.null rm'
-    --                     then 2 --M.map fst rm' `union` dm
-    --                     else go $ M.foldr f (rm',dm) rm'
-    --     baz rm = (M.fromList . map (\(r,(d,s)) -> (s,(d,r))) . M.toList $ rm) `M.difference` rm
-    --     f (s, (d, r)) (rm, dm) = (M.delete r rm, M.insert r (maybe d id $ M.lookup s dm) dm)
-
-
-
-
-    -- rgs = groupAliases refs
-    -- rm = fromList . catMaybes . map (\(r,s) -> (r,) <$> slotp s) $ refs
-    -- foo rg = case filter (`notElem` rg) . map (rm M.!) $ rg of
-    --            [] -> Left rg
-    --            (r:_) -> Right (r, rg)
-    -- (rcycles, rchains) = partitionEithers . map foo $ rgs
-    -- map (\(r, rg) -> ) rchains
-
-    -- dgs = groupAliases defs
-    -- dm = fromList $ defs
-    -- defmap = fromList . regroup $ dgs
-    -- go [] = []
-    -- go []:gs = go gs
-    -- go (g@(r:_)):gs = aliasLookup 
-    -- map (\g@(:_) -> ) defmap
-
--- aliasLookup :: (Aliasable a, Ord (Sig a), Ord r) => Map r Int -> a r -> Maybe Int
 aliasLookup :: (Aliasable a, Ord r) => Map r n -> a r -> (Sig a, [Either r n])
 aliasLookup m = (\e -> (sig e, slots e)) . reslot (\r -> maybe (Left r) Right $ M.lookup r m)
-
--- f :: (Aliasable a, Ord (Sig a), Ord r) =>
---      Map r (a r) -> (Map r Int, Map r (Sig a, [Either r Int]))
--- f m = let m' = aliasMap m in (m', M.map (aliasLookup m') m)
-
--- g :: (Aliasable a, Ord r, s ~ (Sig a, [Either r Int])) =>
---      (Map r Int, Map r s) -> a r -> s
--- g (m, n) e = case slotp e of
---                Nothing -> aliasLookup m e
---                Just r -> M.findWithDefault (aliasLookup m e) r n
 
 aliasig :: (Aliasable a, Ord (Sig a), Ord r) =>
            Map r (a r) -> a r -> (Sig a, [Either r Int])
@@ -182,10 +94,6 @@ aliasig m = let m' = resolveSlotSlots m
                        Just r -> M.findWithDefault (aliasLookup sigm e) r refm
 
 
--- aliasig :: (Aliasable a, Ord (Sig a), Ord r) => Map r (a r) -> a r -> (Sig a, [Either r Int])
--- aliasig = aliasLookup . aliasMap
-
-
 --- type definitions
 
 data Group e r = Group { defs :: [(r, e r)]
@@ -195,9 +103,11 @@ data Group e r = Group { defs :: [(r, e r)]
                        } deriving Show
 
 data Context e r = Context { symbols :: Map (r, Int) (e (r, Int))
-                           , exposed :: Map r (r, Int) }
+                           , exposed :: Map r (r, Int)
+                           , sigify :: e (r, Int) -> (Sig e, [Either (r,Int) Int])
+                           , equivalentp :: e (r, Int) -> e (r, Int) -> Bool }
 
-deriving instance (Show r, Show (e (r, Int))) => Show (Context e r)
+--deriving instance (Show r, Show (e (r, Int))) => Show (Context e r)
 
 data CtxTemp e r = CtxTemp { syms :: Map (r, Int) (e (r, Maybe Int))
                            , expd :: Map r (r, Int) }
@@ -212,10 +122,10 @@ type AOS e r = (Aliasable e, Ord r, Show r)
 
 --- public functions
 
-compile :: AOS e r => Group e r -> CtxMaybe (Context e r)
+compile :: (AOS e r, Ord (Sig e)) => Group e r -> CtxMaybe (Context e r)
 compile g = toContext . snd <$> compile' 0 g
 
-incompile :: AOS e r => Context e r -> Group e r -> CtxMaybe (Context e r)
+incompile :: (AOS e r, Ord (Sig e)) => Context e r -> Group e r -> CtxMaybe (Context e r)
 incompile c g = fromContext c >>= collate g >>= cap >>= return . toContext . snd
 
 contextualise :: AOS e r => Context e r -> e r -> CtxMaybe (e (r, Int))
@@ -232,9 +142,13 @@ fromContext c = let c' = CtxTemp { syms = M.map (reslot wrapSym) $ symbols c
                                  , expd = exposed c }
                 in return (safeNum c', c')
 
-toContext :: Aliasable e => CtxTemp e r -> Context e r
-toContext c = Context { symbols = M.map (reslot unwrapSym) $ syms c
-                      , exposed = expd c }
+toContext :: (Aliasable e, Ord r, Ord (Sig e)) => CtxTemp e r -> Context e r
+toContext c = let syms' = M.map (reslot unwrapSym) $ syms c
+                  sig = aliasig syms'
+              in Context { symbols = syms'
+                         , exposed = expd c
+                         , sigify = sig
+                         , equivalentp = \x y -> sig x == sig y }
 
 safeNum :: Aliasable e => CtxTemp e r -> Int
 safeNum c = succ . foldl' max 0 $ se c ++ ss c ++ sd c
