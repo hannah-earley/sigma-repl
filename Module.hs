@@ -6,10 +6,15 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Module
 ( Aliasable(..)
-, deälias
+, aliasLookup
+, groupAliases
+, resolveSlotSlots
+, fromList
+, aliasig
 , compile
 , incompile
 , contextualise
@@ -18,10 +23,11 @@ module Module
 , Group(..)
 ) where
 
+import Data.Tuple (swap)
 import Data.Maybe (isNothing, isJust, catMaybes)
 import Data.List (group, filter, sort, nub, foldl', partition)
-import Data.Map.Strict (Map, union, keys, elems, intersection, fromList)
-import qualified Data.Map.Strict as M
+import Data.Map.Lazy (Map, union, keys, elems, intersection, fromList)
+import qualified Data.Map.Lazy as M
 
 (!?) :: Ord k => Map k a -> k -> Maybe a
 (!?) = flip M.lookup
@@ -33,6 +39,8 @@ class Aliasable a where
     sig :: a b -> Sig a
     slots :: a b -> [b]
     reslot :: (r -> s) -> a r -> a s
+    slotp :: a b -> Maybe b
+    slotp _ = Nothing
 
 resig :: Ord r => [([r], s)] -> [([r], Maybe [s])]
 resig defs = map resig' defs
@@ -46,8 +54,8 @@ segregate rs = map snd ok ++ (concat $ map (map (:[]) . snd) error)
     grouped = M.toList . M.fromListWith (++) $ map (\(x,y) -> (y,[x])) rs
     (ok, error) = partition (isJust . fst) grouped
 
-regroup :: [[[r]]] -> [([r], Int)]
-regroup = concat . zipWith (\n -> map (,n)) [1..]
+regroup :: [[rs]] -> [(rs, Int)]
+regroup = concat . zipWith (map . flip (,)) [1..]
 
 aliases :: Ord r => [[[r]]] -> [[r]]
 aliases = sort . map sort . map (map head)
@@ -57,11 +65,126 @@ converge p (x:ys@(y:_))
     | p x y     = y
     | otherwise = converge p ys
 
-deälias :: (Aliasable a, Ord (Sig a), Ord r) => [(r, a r)] -> [[r]]
-deälias = converge (==) . map aliases . iterate iter . prep
+groupAliases :: (Aliasable a, Ord (Sig a), Ord r) => [(r, a r)] -> [[r]]
+groupAliases = converge (==) . map aliases . iterate iter . prep
   where
     prep = segregate . map (\(l, f) -> (l : slots f, Just $ sig f))
     iter = segregate . resig . regroup
+
+---
+
+-- aliasMap :: (Aliasable a, Ord (Sig a), Ord r) => Map r (a r) -> Map r Int
+-- aliasMap = fromList . regroup . groupAliases . M.toList . resolveSlotSlots
+
+
+-- aliasMap = aliasMap' . partition (isJust . slotp . snd) . M.toList
+
+-- aliasMap' :: forall a r. (Aliasable a, Ord (Sig a), Ord r) =>
+--              ([(r, a r)], [(r, a r)]) -> Map r Int
+-- aliasMap' (slots, nonslots) = merge (succ . foldr (+) 0 $ elems gmap)
+--                                   . fromList . catMaybes
+--                                   . map (\(r,s) -> (r,) <$> slotp s)
+--                                   $ slots
+--   where
+--     gmap :: Map r Int
+--     gmap = fromList . regroup . groupAliases $ nonslots
+
+--     resolve :: Int -> r -> Map r r -> (Int, [r], Map r r)
+--     resolve n r m = case M.lookup r m of
+--                       Nothing -> (M.findWithDefault n r gmap, [r], m)
+--                       Just s -> let (n', rs, m') = resolve n s $ M.delete r m
+--                                 in (n', r:rs, m')
+
+--     merge :: Int -> Map r r -> Map r Int
+--     merge n m = case keys m of
+--                   [] -> gmap
+--                   r:_ -> let (n', rs, m') = resolve n r m
+--                          in (fromList $ map (,n') rs) `union` merge (n+1) m'
+
+
+
+resolveSlotSlots :: (Aliasable a, Ord r) => Map r (a r) -> Map r (a r)
+resolveSlotSlots syms = let (rm,dm) = until (M.null . aliens . fst)
+                                            (\(rm,dm) -> M.foldrWithKey transfer (rm,dm) $ aliens rm)
+                                            $ M.foldrWithKey part (M.empty, M.empty) syms
+                        in M.map snd rm `union` dm
+  where
+    part s e (rm,dm) = case slotp e of
+                         Nothing -> (rm, M.insert s e dm)
+                         Just r -> (M.insert s (r,e) rm, dm)
+    aliens rm = (M.fromList . map (\(s,(r,e)) -> (r,(s,e))) . M.toList $ rm) `M.difference` rm
+    transfer r (s,e) (rm,dm) = (M.delete s rm, M.insert s (maybe e id $ M.lookup r dm) dm)
+    --(refs, defs) = partition (isJust . slotp . snd) . M.toList $ m
+
+    -- (refs, defs) = M.foldrWithKey part (M.empty, M.empty) syms
+    --part :: Ord r => r -> a r -> (Map r (r, a r), Map r (a r)) -> (Map r (r, a r), Map r (a r))
+
+
+    -- transfer' (rm,dm) rm' = M.foldr transfer (rm,dm) rm'
+
+    -- (rm, dm) = until (M.null . aliens . fst) (\(rm,dm) -> M.foldrWithKey transfer (rm,dm) $ aliens rm) (refs, defs)
+
+
+    -- (rm, dm) = M.foldr bar (M.empty, M.empty) m
+    -- bar (r, d) (rm, dm) = case slotp d of
+    --                         Nothing -> (rm, M.insert r d dm)
+    --                         Just s -> (M.insert r (d,s) rm, dm)
+
+    -- foo rm dm = go (rm, dm)
+    --   where
+    --     go (rm,dm) = let rm' = baz rm
+    --                  in if M.null rm'
+    --                     then 2 --M.map fst rm' `union` dm
+    --                     else go $ M.foldr f (rm',dm) rm'
+    --     baz rm = (M.fromList . map (\(r,(d,s)) -> (s,(d,r))) . M.toList $ rm) `M.difference` rm
+    --     f (s, (d, r)) (rm, dm) = (M.delete r rm, M.insert r (maybe d id $ M.lookup s dm) dm)
+
+
+
+
+    -- rgs = groupAliases refs
+    -- rm = fromList . catMaybes . map (\(r,s) -> (r,) <$> slotp s) $ refs
+    -- foo rg = case filter (`notElem` rg) . map (rm M.!) $ rg of
+    --            [] -> Left rg
+    --            (r:_) -> Right (r, rg)
+    -- (rcycles, rchains) = partitionEithers . map foo $ rgs
+    -- map (\(r, rg) -> ) rchains
+
+    -- dgs = groupAliases defs
+    -- dm = fromList $ defs
+    -- defmap = fromList . regroup $ dgs
+    -- go [] = []
+    -- go []:gs = go gs
+    -- go (g@(r:_)):gs = aliasLookup 
+    -- map (\g@(:_) -> ) defmap
+
+-- aliasLookup :: (Aliasable a, Ord (Sig a), Ord r) => Map r Int -> a r -> Maybe Int
+aliasLookup :: (Aliasable a, Ord r) => Map r n -> a r -> (Sig a, [Either r n])
+aliasLookup m = (\e -> (sig e, slots e)) . reslot (\r -> maybe (Left r) Right $ M.lookup r m)
+
+-- f :: (Aliasable a, Ord (Sig a), Ord r) =>
+--      Map r (a r) -> (Map r Int, Map r (Sig a, [Either r Int]))
+-- f m = let m' = aliasMap m in (m', M.map (aliasLookup m') m)
+
+-- g :: (Aliasable a, Ord r, s ~ (Sig a, [Either r Int])) =>
+--      (Map r Int, Map r s) -> a r -> s
+-- g (m, n) e = case slotp e of
+--                Nothing -> aliasLookup m e
+--                Just r -> M.findWithDefault (aliasLookup m e) r n
+
+aliasig :: (Aliasable a, Ord (Sig a), Ord r) =>
+           Map r (a r) -> a r -> (Sig a, [Either r Int])
+aliasig m = let m' = resolveSlotSlots m
+                sigm = fromList . regroup . groupAliases . M.toList $ m'
+                refm = M.map (aliasLookup sigm) m'
+            in \e -> case slotp e of
+                       Nothing -> aliasLookup sigm e
+                       Just r -> M.findWithDefault (aliasLookup sigm e) r refm
+
+
+-- aliasig :: (Aliasable a, Ord (Sig a), Ord r) => Map r (a r) -> a r -> (Sig a, [Either r Int])
+-- aliasig = aliasLookup . aliasMap
+
 
 --- type definitions
 

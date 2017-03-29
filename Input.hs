@@ -8,8 +8,8 @@ module Input
 , loadstr
 ) where
 
-import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
+import Data.Map.Lazy (Map)
+import qualified Data.Map.Lazy as M
 import Numeric.Natural
 import Data.Either
 import Data.Tuple
@@ -144,13 +144,13 @@ identifier ks = token [x | x <- ident, not (x `elem` ks)]
 
 --- string literals
 
-escape :: Char -> Map.Map Char Char -> Parser Char
+escape :: Char -> Map Char Char -> Parser Char
 escape ec ecs = do char ec
                    c <- item
-                   return $ Map.findWithDefault c c ecs
+                   return $ M.findWithDefault c c ecs
 
 stresc :: Parser Char
-stresc = escape '\\' $ Map.fromList
+stresc = escape '\\' $ M.fromList
   [('a', '\a'), ('b', '\b'), ('f', '\f'), ('n', '\n')
   ,('r', '\r'), ('t', '\t'), ('v', '\v')]
 
@@ -319,8 +319,8 @@ translate ceil = foldr incorp . pure $ Group [] [] [] ceil
 reimport :: [(ID,ID)] -> ExprGroup -> ExprGroup
 reimport ps g = g { promotes = foldr f [] ps }
   where
-    xm = Map.fromList . map swap $ promotes g
-    f (m,n) qs = case Map.lookup m xm of
+    xm = M.fromList . map swap $ promotes g
+    f (m,n) qs = case M.lookup m xm of
                    Just l -> (l,n) : qs
                    Nothing -> error $ "Import error on: " ++ m
 
