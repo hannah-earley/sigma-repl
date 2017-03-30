@@ -1,7 +1,4 @@
 {-# LANGUAGE MonadComprehensions #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 module Input
 ( loadprog
@@ -11,10 +8,8 @@ module Input
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as M
 import Numeric.Natural
-import Data.Either
 import Data.Tuple
 
-import Data.Functor
 import Control.Applicative
 import Control.Monad
 
@@ -66,7 +61,7 @@ many1 p = [x:xs | x <- p, xs <- many p]
 largest :: Parser a -> Parser a
 largest p = Parser $ \inp -> case runParser p inp of
                             []     -> []
-                            (x:xs) -> [x]
+                            (x:_) -> [x]
 
 smallest :: Parser a -> Parser a
 smallest p = Parser $ \inp -> case runParser p inp of
@@ -191,7 +186,7 @@ env n p = brack "()" $ symbol n >> p
 type Expr' = Expr ID ID
 
 expr :: Parser Expr'
-expr = largest atom
+expr = largest $ parse atom
   where
 
     atom = stop <||> perm <||> app <||> label <||> ref <||> lit
@@ -221,7 +216,7 @@ expr = largest atom
 
     llist = brack "[]" $ foldr co ni <$> many expr
       where
-        co x xs = wrap [Ref "cons", wrap [x, xs]]
+        co x z = wrap [Ref "cons", wrap [x, z]]
         ni = wrap [Ref "nil", Stop]
 
     lnat = wnat <$> token nat
@@ -239,21 +234,19 @@ data Term = Inherit FilePath (Either () [(ID, ID)])
           | Define Bool (ID, ID) Expr'
           | Raw Expr'
 
-deriving instance Show Expr' => Show Term
-
 terms :: Parser [Term]
-terms = largest $ many term
+terms = largest . parse $ many term
   where
 
     term = largest atom
 
     atom = inherit <||> bequeath <||> group <||> def <||> raw
 
-    inherit = all <||> some
+    inherit = all' <||> some'
       where
-        all = env "inherit*" $ flip Inherit (Left ()) <$> path
-        some = env "inherit" $
-            liftM2 Inherit path (Right <$> many promoter)
+        all' = env "inherit*" $ flip Inherit (Left ()) <$> path
+        some' = env "inherit" $
+                liftM2 Inherit path (Right <$> many promoter)
 
     bequeath = env "bequeath" $ Bequeath <$> many promoter
 
@@ -312,7 +305,7 @@ translate ceil = foldr incorp . pure $ Group [] [] [] ceil
                               <$> loadprog fp >>= flip inschild g
            Bequeath ps -> insproms ps g
            TermGroup h -> translate False h >>= flip inschild g
-           Define True p@(m,n) d -> insdef m d g >>= insproms [p]
+           Define True p@(m,_) d -> insdef m d g >>= insproms [p]
            Define False (m,_) d -> insdef m d g
            Raw _ -> return g
 
@@ -327,7 +320,7 @@ reimport ps g = g { promotes = foldr f [] ps }
 loadprog :: FilePath -> IO ExprGroup
 loadprog p = let (d,f) = splitFileName p
              in withCurrentDirectory d $
-                  loadterms p >>= translate True
+                  loadterms f >>= translate True
 
 loadstr :: String -> IO ExprGroup
 loadstr s = case runParser terms s of

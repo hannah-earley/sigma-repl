@@ -1,12 +1,8 @@
-{-# LANGUAGE UnicodeSyntax #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 module Module
 ( Aliasable(..)
@@ -19,14 +15,20 @@ module Module
 , Group(..)
 ) where
 
-import Data.Tuple (swap)
-import Data.Maybe (isNothing, isJust, catMaybes)
+import Data.Maybe (isNothing, isJust, catMaybes, fromJust)
 import Data.List (group, filter, sort, nub, foldl', partition)
 import Data.Map.Lazy (Map, union, keys, elems, intersection, fromList)
 import qualified Data.Map.Lazy as M
 
 (!?) :: Ord k => Map k a -> k -> Maybe a
 (!?) = flip M.lookup
+
+mapKeyVals f = M.fromList . map (\(k,v) -> f k v) . M.toList
+
+converge :: (a -> a -> Bool) -> [a] -> a
+converge p (x:ys@(y:_))
+    | p x y     = y
+    | otherwise = converge p ys
 
 --- deäliasing machinery
 
@@ -38,61 +40,63 @@ class Aliasable a where
     slotp :: a b -> Maybe b
     slotp _ = Nothing
 
+type AOSO a r = (Aliasable a, Ord (Sig a), Ord r)
+
+-- map each slot to its symbol signature, or Nothing if the symbol is undefined
 resig :: Ord r => [([r], s)] -> [([r], Maybe [s])]
-resig defs = map resig' defs
+resig defs' = map resig' defs'
   where
-    m = fromList $ map (\(l:_, s) -> (l, s)) defs
+    m = fromList $ map (\(l:_, s) -> (l, s)) defs'
     resig' (rs, _) = (rs, sequence $ map (m !?) rs)
 
+-- group symbols by signature, leaving Nothings distinct
 segregate :: Ord ss => [(rs, Maybe ss)] -> [[rs]]
-segregate rs = map snd ok ++ (concat $ map (map (:[]) . snd) error)
+segregate rs = map snd ok ++ (concatMap (map (:[]) . snd) err)
   where
     grouped = M.toList . M.fromListWith (++) $ map (\(x,y) -> (y,[x])) rs
-    (ok, error) = partition (isJust . fst) grouped
+    (ok, err) = partition (isJust . fst) grouped
 
+-- create new signatures based on groups
 regroup :: [[rs]] -> [(rs, Int)]
 regroup = concat . zipWith (map . flip (,)) [1..]
 
+-- erase slot information
 aliases :: Ord r => [[[r]]] -> [[r]]
 aliases = sort . map sort . map (map head)
 
-converge :: (a -> a -> Bool) -> [a] -> a
-converge p (x:ys@(y:_))
-    | p x y     = y
-    | otherwise = converge p ys
-
-groupAliases :: (Aliasable a, Ord (Sig a), Ord r) => [(r, a r)] -> [[r]]
+-- group a symbol table into semantically equivalent symbols
+groupAliases :: AOSO a r => [(r, a r)] -> [[r]]
 groupAliases = converge (==) . map aliases . iterate iter . prep
   where
     prep = segregate . map (\(l, f) -> (l : slots f, Just $ sig f))
     iter = segregate . resig . regroup
 
---- todo - make clearer?
-
+-- resolve ref (slot) chains into their final expressions
 resolveSlotSlots :: (Aliasable a, Ord r) => Map r (a r) -> Map r (a r)
-resolveSlotSlots syms = let (rm,dm) = until (M.null . aliens . fst)
-                                            (\(rm,dm) -> M.foldrWithKey transfer (rm,dm) $ aliens rm)
-                                            $ M.foldrWithKey part (M.empty, M.empty) syms
-                        in M.map snd rm `union` dm
-  where
-    part s e (rm,dm) = case slotp e of
-                         Nothing -> (rm, M.insert s e dm)
-                         Just r -> (M.insert s (r,e) rm, dm)
-    aliens rm = (M.fromList . map (\(s,(r,e)) -> (r,(s,e))) . M.toList $ rm) `M.difference` rm
-    transfer r (s,e) (rm,dm) = (M.delete s rm, M.insert s (maybe e id $ M.lookup r dm) dm)
+resolveSlotSlots = uncurry (union . M.map fst)
+                 . until (M.null . unclosed . fst) iterclose
+                 . (\(rm,dm) -> (M.map (fromJust <$>) rm, M.map fst dm))
+                 . M.partition (isJust . snd)
+                 . M.map (\e -> (e, slotp e))
 
-aliasLookup :: (Aliasable a, Ord r) => Map r n -> a r -> (Sig a, [Either r n])
-aliasLookup m = (\e -> (sig e, slots e)) . reslot (\r -> maybe (Left r) Right $ M.lookup r m)
+iterclose (rm,dm) = M.foldrWithKey transfer (rm,dm) $ unclosed rm
+unclosed rm = transpose rm `M.difference` rm
+transpose = mapKeyVals (\s (e,r) -> (r,(e,s)))
+transfer r (e,s) (rm,dm) = (M.delete s rm,
+                            M.insert s (M.findWithDefault e r dm) dm)
 
-aliasig :: (Aliasable a, Ord (Sig a), Ord r) =>
-           Map r (a r) -> a r -> (Sig a, [Either r Int])
+-- lookup generalised signature from alias map
+gsigLookup :: (Aliasable a, Ord r) => Map r n -> a r -> (Sig a, [Either r n])
+gsigLookup m = let deref ref = maybe (Left ref) Right $ M.lookup ref m
+               in (\e -> (sig e, slots e)) . reslot deref
+
+-- create a unique signature for an expression from a symbol table
+aliasig :: AOSO a r => Map r (a r) -> a r -> (Sig a, [Either r Int])
 aliasig m = let m' = resolveSlotSlots m
-                sigm = fromList . regroup . groupAliases . M.toList $ m'
-                refm = M.map (aliasLookup sigm) m'
-            in \e -> case slotp e of
-                       Nothing -> aliasLookup sigm e
-                       Just r -> M.findWithDefault (aliasLookup sigm e) r refm
-
+                sigm = gsigLookup . fromList . regroup
+                                  . groupAliases $ M.toList m'
+                refm r d = M.findWithDefault d r $ M.map sigm m'
+            in \e -> maybe id refm (slotp e) (sigm e)
 
 --- type definitions
 
@@ -106,8 +110,6 @@ data Context e r = Context { symbols :: Map (r, Int) (e (r, Int))
                            , exposed :: Map r (r, Int)
                            , sigify :: e (r, Int) -> (Sig e, [Either (r,Int) Int])
                            , equivalentp :: e (r, Int) -> e (r, Int) -> Bool }
-
---deriving instance (Show r, Show (e (r, Int))) => Show (Context e r)
 
 data CtxTemp e r = CtxTemp { syms :: Map (r, Int) (e (r, Maybe Int))
                            , expd :: Map r (r, Int) }
@@ -144,10 +146,10 @@ fromContext c = let c' = CtxTemp { syms = M.map (reslot wrapSym) $ symbols c
 
 toContext :: (Aliasable e, Ord r, Ord (Sig e)) => CtxTemp e r -> Context e r
 toContext c = let syms' = M.map (reslot unwrapSym) $ syms c
-                  sig = aliasig syms'
+                  sig' = aliasig syms'
               in Context { symbols = syms'
                          , exposed = expd c
-                         , sigify = sig
+                         , sigify = sig'
                          , equivalentp = \x y -> sig x == sig y }
 
 safeNum :: Aliasable e => CtxTemp e r -> Int
@@ -155,17 +157,17 @@ safeNum c = succ . foldl' max 0 $ se c ++ ss c ++ sd c
   where
     se = map snd . elems . expd
     ss = map snd . keys . syms
-    sd = catMaybes . map snd . concat . map slots . elems . syms
+    sd = catMaybes . map snd . concatMap slots . elems . syms
 
 --- main compilation logic
 
 compile' :: AOS e r => Int -> Group e r -> TempContext e r
-compile' n g = foldr f (prep n g) (children g) >>= res
+compile' n g = foldr f (lift n g) (children g) >>= res
                 >>= reexport (promotes g) >>= shine
   where
     f x z = z >>= collate x
     shine = if ismod g then cap else return
-    res (n, c) = return (n, resolve c)
+    res = return . (resolve <$>)
 
 collate :: AOS e r => Group e r -> (Int, CtxTemp e r) -> TempContext e r
 collate g (n, c) = compile' n g >>= combine c
@@ -178,8 +180,8 @@ combine c (n', c') = let reexps = keys $ expd c `intersection` expd c'
 
 --- compilation helper functions
 
-prep :: AOS e r => Int -> Group e r -> TempContext e r
-prep n g = safeFromList (cecf "definition" . map fst) (map (wrapDef n) $ defs g)
+lift :: AOS e r => Int -> Group e r -> TempContext e r
+lift n g = safeFromList (cecf "definition" . map fst) (map (wrapDef n) $ defs g)
              >>= \ss -> return (n + 1, CtxTemp ss $ expSyms ss)
 
 reexport :: (Ord r, Show r) => [(r,r)] -> (Int, CtxTemp e r) -> TempContext e r
@@ -194,7 +196,7 @@ resolve :: (Aliasable e, Ord r) => CtxTemp e r -> CtxTemp e r
 resolve c = c { syms = M.map (reslot . resolutionMap $ expd c) (syms c) }
 
 cap :: AOS e r => (Int, CtxTemp e r) -> TempContext e r
-cap (n, c) = (n,) <$> let u = notfound . concat . map slots . elems $ syms c
+cap (n, c) = (n,) <$> let u = notfound . concatMap slots . elems $ syms c
                       in if null u then return c else cerr $ msg ++ show u
   where msg = "couldn't resolve symbol(s): "
 
