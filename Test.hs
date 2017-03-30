@@ -7,7 +7,6 @@ module Test(module Test) where
 import Module
 import Model
 import Numeric.Natural
-import Data.List
 
 type Expr' = Expr String String
 l = Label
