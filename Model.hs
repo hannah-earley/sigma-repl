@@ -7,6 +7,7 @@
 
 module Model
 ( Expr(..)
+, Expression
 , Direction(..)
 , bruijns
 , eval
@@ -69,7 +70,7 @@ pattern DataSeq a b <- Seq [Stop, a, b, Stop]
 showdat [Ref "cons", DataSeq x y] = "[" ++ unwords (show x : showdatl y) ++ "]"
 showdat [Ref "nil", Stop] = "[]"
 showdat [Ref "succ", n] = showdatn 1 n
-showdat [Ref "zero", _] = "#0"
+showdat [Ref "zero", _] = "0"
 showdat d = "{" ++ showseq d ++ "}"
 
 showdatl (DataSeq (Ref "cons") (DataSeq x y)) = show x : showdatl y
@@ -78,7 +79,7 @@ showdatl x = [". " ++ show x]
 
 showdatn :: Int -> Expr ID ID -> String
 showdatn n (DataSeq (Ref "succ") m) = showdatn (n+1) m
-showdatn n (DataSeq (Ref "zero") Stop) = '#' : show n
+showdatn n (DataSeq (Ref "zero") Stop) = show n
 showdatn n x = "{#" ++ show n ++ " . " ++ show x ++ "}"
 
 --- deäliasing machinery
@@ -98,8 +99,8 @@ inside and out:
 We have an ambiguity, do we consider associated expression labels as impotent,
 or should we require that if two expressions are identically labelled then
 they should be equivalent? The simpler option is to make them impotent.
-
 -}
+
 data SigCtx = SigPerm | SigExpr
 
 pmap :: (Expr l a -> Expr m b) -> Expr l a -> Expr m b
@@ -147,7 +148,6 @@ sig' c m (As l x) = case c of
                       SigExpr -> sig' c m x
                       SigPerm -> As (M.findWithDefault [] l m) $ sig' c m x
 
-
 bruijns :: Ord l => [Int] -> Expr l a -> Map l [Int] -> Map l [Int]
 bruijns pre (Seq xs) m = foldl (\m' (n, x) -> bruijns (n:pre) x m') m $ zip [1..] xs
 bruijns pre (Label l) m = M.alter (Just . maybe pre id) l m
@@ -176,10 +176,10 @@ eval' c d x@(n, e)
 
 eval'' :: x ~ (Maybe Int, Expression) => Ctx -> Direction -> x -> x
 eval'' c d (pn -> n, As l e) = As l <$> eval' c d (n, e)
-eval'' _ _ (pn -> n, Ref r) = (n, Ref r)
-eval'' c d (pn -> n, s@(ps c d n -> Just ((n',a,b), xs))) =
-  let finish = (permjoin d a b . flip map b . substitute <$>)
-  in eval' c d . maybe (Just 0, s) finish $ unifold M.empty n' c a xs
+eval'' _ _ (n, Ref r) = (n, Ref r)
+eval'' c d (pn -> n, s@(ps c d n -> Just ((n',a,b), (p,xs)))) =
+  let finish = (permjoin d p . flip map b . substitute <$>)
+  in eval' c d . maybe (Just 0, s) finish $ unifold c a xs (n', M.empty)
 eval'' _ _ (_, e) = (Just (-1), e)
   -- shouldn't get here, as these expressions should be `terminated`
 
@@ -217,11 +217,11 @@ permify n c Down (reduce c . (n,) -> (n', Perm l r)) = Just (n', l, r)
 permify n c Up (reduce c . (n,) -> (n', Perm l r)) = Just (n', r, l)
 permify _ _ _ _ = Nothing
 
-ps c d n (Seq (seqsplit d -> Just (x,y))) = (,y) <$> permify n c d x
+ps c d n (Seq (seqsplit d -> Just y@(x,_))) = (,y) <$> permify n c d x
 ps _ _ _ _ = Nothing
 
-permjoin Down a b xs = Seq (Perm a b : xs)
-permjoin Up a b xs = Seq (xs ++ [Perm b a])
+permjoin Down p xs = Seq (xs ++ [p])
+permjoin Up p xs = Seq (p : xs)
 
 ---
 
@@ -229,33 +229,33 @@ equivify :: m ~ Map ID Expression => m -> Ctx -> Expression -> Expression -> May
 equivify m c e e' = if equivalentp c e e' then Just m else Nothing
 
 reduce :: x ~ (Maybe Int, Expression) => Ctx -> x -> x
-reduce _ x@(n, _) | maybe False (<= 0) n = x
-reduce c (n, As _ e) = reduce c (pn n, e)
-reduce c (n, Ref r) = maybe (pn n, Ref r) (reduce c . (pn n,)) $ fetch c r
+reduce _ x@(n, _) | maybe False (<0) n = x
+reduce c (pn -> n, As _ e) = reduce c (n, e)
+reduce c (n, Ref r) = maybe (n, Ref r) next $ fetch c r
+  where
+    next x@(As _ _) = reduce c (n, x)
+    next x = (n, x)
 reduce _ x = x
 
-unify :: m ~ Map ID Expression => m -> Maybe Int -> Ctx -> Expression -> Expression -> Maybe (Maybe Int, m)
-unify m n c s@(Seq xs@(_:_)) e = go Down <|> go Up
+unify :: m ~ (Maybe Int, Map ID Expression) => Ctx -> Expression -> Expression -> m -> Maybe m
+unify c s@(Seq xs@(_:_)) e (n,m) = go Down <|> go Up
   where
     go d = do guard . terminated c d $ s
               (n', Seq ys) <- return . eval' c d . reduce c $ (n, e)
               guard . terminated c d $ Seq ys
-              unifold m n' c xs ys
+              unifold c xs ys (n',m)
 
-unify m n c (Label l) e = (n,) <$> case M.lookup l m of
-                                     Nothing -> Just (M.insert l e m)
-                                     Just e' -> equivify m c e e'
+unify c (Label l) e (n,m) = (n,) <$> maybe (return $ M.insert l e m)
+                                           (equivify m c e) (M.lookup l m)
 
-unify m n c (As l e) e' = do (n', m') <- unify m n c (Label l) e'
-                             unify m' n' c e e'
+unify c (As l e) e' nm = unify c (Label l) e' nm >>= unify c e e'
 
-unify m n c e e' = (n,) <$> equivify m c e e'
+unify c e e' (n,m) = (n,) <$> equivify m c e e'
 
-unifold :: m ~ Map ID Expression => m -> Maybe Int -> Ctx -> [Expression] -> [Expression] -> Maybe (Maybe Int, m)
-unifold m n c (x:xs) (y:ys) = do (n', m') <- unify m n c x y
-                                 unifold m' n' c xs ys
-unifold m n _ [] [] = Just (n, m)
-unifold _ _ _ _ _ = Nothing
+unifold :: m ~ (Maybe Int, Map ID Expression) => Ctx -> [Expression] -> [Expression] -> m -> Maybe m
+unifold c (x:xs) (y:ys) nm = unify c x y nm >>= unifold c xs ys
+unifold _ [] [] nm = Just nm
+unifold _ _ _ _ = Nothing
 
 substitute :: Map ID Expression -> Expression -> Expression
 substitute m (Label l) = M.findWithDefault (Label l) l m
