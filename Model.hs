@@ -158,82 +158,6 @@ bruijns _ _ m = m
 
 data Direction = Up | Down
 
-disambiguate :: Ord r => Context (Expr l) r -> r -> Maybe (r, Int)
-disambiguate = flip M.lookup . exposed
-
-fetch :: Ord r => Context (Expr l) r -> (r, Int) -> Maybe (Expr l (r, Int))
-fetch = flip M.lookup . symbols
-
--- disfetch :: Ord r => Context (Expr l) r -> r -> Maybe (Expr l (r, Int))
--- disfetch c r = return r >>= disambiguate c >>= fetch c 
-
-terminus :: Ord r => Context (Expr l) r -> Expr l (r, Int) -> Bool
-terminus _ (Perm _ _) = False
-terminus c (As _ e)   = terminus c e
-terminus c (Ref r)    = maybe True (terminus c) $ fetch c r
-terminus _ _          = True
-
-terminated :: Ord r => Context (Expr l) r -> Direction -> Expr l (r, Int) -> Bool
-terminated c d (As _ e) = terminated c d e
-terminated c d (Ref r) = maybe True (terminated c d) $ fetch c r
-terminated c Down (Seq (x : _)) = terminus c x
-terminated c Up (Seq s@(_ : _)) = terminus c $ last s
-terminated _ _ _ = True
-
-{- why not make eval use step?
-
-because we want to keep an evaluation counter to prevent infinite loops, and
-each step should decrement the counter; but what should step do if it encounters
-a nested non-terminal sequence?
-
- - it could do nothing, in which case eval now needs to reïmplement some of
-   the step logic in order to determine which subseq to select
-
- - it could ask eval to terminate the subseq appropriately, but as step
-   doesn't care about the evaluation counter we are forced to allow
-   unbounded execution (even if each subseq has finite steps, they could
-   themselves instantiate subseqs recursively ad infinitum)
-
-thus, rather than code duplicate, we might as well have evaluate implement the
-stepping, and its subseq choices, whilst minding the evaluation counter and then
-we can implement `step` simply as evaluation with max 1 step
-
-what about nesting? should impart a penalty?? could we construct an infinite
-nest of noops?
-
-  fubar = As f fubar
-
-would be problematic, so perhaps each descent should incur a penalty of 1 step
-to mitigate this? this would also recover the behaviour I originally envisaged
-in which you would have to select the individual subexpressions to step during
-manual evaluation mode;
-
-perhaps we could allow prefixing an evaluation instruction with a number to
-overcome this limitation?
-
--}
-
--- short-circuiting
-eval' :: x ~ (Maybe Int, Expression) => Ctx -> Direction -> x -> x
-eval' c d x@(n, e)
-  | maybe False (<= 0) n = x
-  | terminated c d e = x
-  | otherwise = eval'' c d x
-
-eval'' :: x ~ (Maybe Int, Expression) => Ctx -> Direction -> x -> x
-eval'' c d (n, As l e) = As l <$> eval' c d (pn n, e)
-eval'' c d x@(n, Ref r) = maybe x go $ fetch c r
-  where
-    go = (As ("`" ++ fst r ++ suffix) <$>) . eval' c d . (pn n,)
-    suffix = if disambiguate c (fst r) == Just r then "" else '_' : show (snd r)
-
-eval'' c d (pn -> n, s@(ps c d n -> Just ((n',a,b), xs))) =
-  let finish = (permjoin d a b . flip map b . substitute <$>)
-  in eval' c d . maybe (Just 0, s) finish $ unifold M.empty n' c a xs
-
-eval'' _ _ (_, e) = (Just (-1), e)
-  -- shouldn't get here, as these expressions should be `terminated`
-
 eval :: Int -> Ctx -> Direction -> Expression -> Expression
 eval n c d = snd . eval' c d . (Just n,)
 
@@ -242,6 +166,38 @@ exec c d = snd . eval' c d . (Nothing,)
 
 step :: Ctx -> Direction -> Expression -> Expression
 step c = eval 1 c
+
+-- short-circuiting
+eval' :: x ~ (Maybe Int, Expression) => Ctx -> Direction -> x -> x
+eval' c d x@(n, e)
+  | maybe False (<= 0) n = x
+  | terminated c d e     = x
+  | otherwise            = eval'' c d x
+
+eval'' :: x ~ (Maybe Int, Expression) => Ctx -> Direction -> x -> x
+eval'' c d (pn -> n, As l e) = As l <$> eval' c d (n, e)
+eval'' _ _ (pn -> n, Ref r) = (n, Ref r)
+eval'' c d (pn -> n, s@(ps c d n -> Just ((n',a,b), xs))) =
+  let finish = (permjoin d a b . flip map b . substitute <$>)
+  in eval' c d . maybe (Just 0, s) finish $ unifold M.empty n' c a xs
+eval'' _ _ (_, e) = (Just (-1), e)
+  -- shouldn't get here, as these expressions should be `terminated`
+
+fetch :: Ord r => Context (Expr l) r -> (r, Int) -> Maybe (Expr l (r, Int))
+fetch = flip M.lookup . symbols
+
+terminus :: Ord r => Context (Expr l) r -> Expr l (r, Int) -> Bool
+terminus _ (Perm _ _) = False
+terminus c (As _ e)   = terminus c e
+terminus c (Ref r)    = maybe True (terminus c) $ fetch c r
+terminus _ _          = True
+
+terminated :: Ord r => Context (Expr l) r -> Direction -> Expr l (r, Int) -> Bool
+terminated c d (As _ e)         = terminated c d e
+terminated c d (Ref r)          = maybe True (terminated c d) $ fetch c r
+terminated c Down (Seq (x : _)) = terminus c x
+terminated c Up (Seq s@(_ : _)) = terminus c $ last s
+terminated _ _ _                = True
 
 --- useful viewpattern functions
 
@@ -282,8 +238,7 @@ unify :: m ~ Map ID Expression => m -> Maybe Int -> Ctx -> Expression -> Express
 unify m n c s@(Seq xs@(_:_)) e = go Down <|> go Up
   where
     go d = do guard . terminated c d $ s
-              (n', Seq ys) <- return . reduce c
-                                     $ eval' c d (n, e)
+              (n', Seq ys) <- return . eval' c d . reduce c $ (n, e)
               guard . terminated c d $ Seq ys
               unifold m n' c xs ys
 
