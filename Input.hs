@@ -3,6 +3,7 @@
 module Input
 ( loadprog
 , loadstr
+, loadexpr
 ) where
 
 import Data.Map.Lazy (Map)
@@ -289,7 +290,7 @@ loadterms :: FilePath -> IO [Term]
 loadterms path = do c <- trypaths [path, path <.> "sig"]
                     case runParser terms c of
                       [(ts,"")] -> return ts
-                      _ -> error ("Syntax error in: " ++ path)
+                      _ -> fail ("Syntax error in: " ++ path)
 
 translate :: Bool -> [Term] -> IO ExprGroup
 translate ceil = foldr incorp . pure $ Group [] [] [] ceil
@@ -325,4 +326,9 @@ loadprog p = let (d,f) = splitFileName p
 loadstr :: String -> IO ExprGroup
 loadstr s = case runParser terms s of
               [(ts,"")] -> translate True ts
-              _ -> error "Syntax error"
+              _ -> fail "Syntax error"
+
+loadexpr :: String -> Maybe (Expr ID ID)
+loadexpr s = case runParser expr s of
+               [(e,"")] -> Just e
+               _ -> Nothing
