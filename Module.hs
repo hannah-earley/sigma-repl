@@ -124,6 +124,9 @@ type AOS e r = (Aliasable e, Ord r, Show r)
 
 --- public functions
 
+-- TODO: incompile shouldn't have to regenerate aliasig,
+--       this should be recomputed incrementally
+
 compile :: (AOS e r, Ord (Sig e)) => Group e r -> CtxMaybe (Context e r)
 compile g = toContext . snd <$> compile' 0 g
 

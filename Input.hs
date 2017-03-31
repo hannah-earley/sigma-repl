@@ -4,6 +4,10 @@ module Input
 ( loadprog
 , loadstr
 , loadexpr
+, runcmd
+, CBad(..)
+, Command(..)
+, EvalMode(..)
 ) where
 
 import Data.Map.Lazy (Map)
@@ -13,6 +17,8 @@ import Data.Tuple
 
 import Control.Applicative
 import Control.Monad
+import Control.Exception (Exception, throwIO, displayException, handle)
+import Data.Typeable (Typeable)
 
 import System.IO (readFile)
 import System.IO.Error (isDoesNotExistError)
@@ -93,8 +99,8 @@ string (x:xs) = (:) <$> char x <*> string xs
 
 --- brackets
 
-bracket :: Parser a -> Parser b -> Parser c -> Parser b
-bracket l p r = do { l ; x <- p ; r ; return x }
+bracket :: Parser a -> Parser b -> Parser c -> Parser c
+bracket l r p = l *> p <* r
 
 --- lexing
 
@@ -102,22 +108,21 @@ ignore :: Parser a -> Parser ()
 ignore = (const () <$>)
 
 spaces :: Parser ()
-spaces = [() | _ <- many1 $ chars " \t\n\f\r\v"]
+spaces = ignore . many1 $ chars " \t\n\f\r\v"
 
 comment :: Parser ()
 comment = smallest . ignore
-                   $ bracket (string "(*")
+                   $ bracket (string "(*") (string "*)")
                              (many $ comment <||> ignore item)
-                             (string "*)")
 
 junk :: Parser ()
 junk = ignore . many $ spaces <||> comment
 
 parse :: Parser a -> Parser a
-parse = (junk >>)
+parse = (junk *>)
 
 token :: Parser a -> Parser a
-token p = do { x <- p ; junk ; return x}
+token = (<* junk)
 
 --- symbols
 
@@ -151,8 +156,7 @@ stresc = escape '\\' $ M.fromList
   ,('r', '\r'), ('t', '\t'), ('v', '\v')]
 
 strlit :: Char -> Parser String
-strlit c = let schar = stresc <||> sat (/= c)
-           in bracket (char c) (many schar) (char c)
+strlit c = brack [c,c] . many $ stresc <||> sat (/= c)
 
 litstr :: Char -> Parser String
 litstr = token . strlit
@@ -178,9 +182,8 @@ labelgen lf af ae = do l <- variable
                        (<||>) (symbol "@" >> af l <$> ae)
                               (return $ lf l)
 
-paren p = bracket (symbol "(") p (symbol ")")
-brack (l:r:"") p = bracket (symbol $ l:"") p (symbol $ r:"")
-env n p = brack "()" $ symbol n >> p
+paren = bracket (symbol "(") (symbol ")")
+brack (l:r:"") = bracket (symbol [l]) (symbol [r])
 
 --- sigma expressions
 
@@ -275,13 +278,26 @@ terms = largest . parse $ many term
 
     promoter = labelgen (\l -> (l, l)) (,) variable
 
+    env n p = brack "()" $ symbol n >> p
+
 --- program translation
 
 type ExprGroup = Group (Expr ID) ID
 
+data GroupException = LocateError FilePath
+                    | SyntaxError FilePath
+                    | ImportError FilePath ID
+                    deriving (Show, Typeable)
+
+instance Exception GroupException where
+  displayException (LocateError p) = "Couldn't locate: " ++ p
+  displayException (SyntaxError p) = "Syntax error in: " ++ p
+  displayException (ImportError p s) = "In: " ++ p ++ "; Couldn't import: " ++ s
+
+
 trypaths :: [FilePath] -> IO String
-trypaths [] = error "no path to open"
-trypaths fs@(f:_) = foldr go (error $ "couldn't open" ++ f) fs
+trypaths [] = error "trypaths: no paths to try"
+trypaths fs@(f:_) = foldr go (throwIO $ LocateError f) fs
   where
     go fp z = catchJust err (readFile fp) (const z)
     err = guard . isDoesNotExistError
@@ -290,45 +306,91 @@ loadterms :: FilePath -> IO [Term]
 loadterms path = do c <- trypaths [path, path <.> "sig"]
                     case runParser terms c of
                       [(ts,"")] -> return ts
-                      _ -> fail ("Syntax error in: " ++ path)
+                      _ -> throwIO $ SyntaxError path
 
+-- translate a list of terms to a term group
+-- bool argument specifies whether this is a top-level module
 translate :: Bool -> [Term] -> IO ExprGroup
-translate ceil = foldr incorp . pure $ Group [] [] [] ceil
+translate = foldr incorp . pure . Group [] [] []
   where
-    inschild c g = return $ g { children = c : children g }
-    insproms ps g = return $ g { promotes = ps ++ promotes g }
-    insdef n d g = return $ g { defs = (n,d) : defs g }
+    inschild = liftM2 $ \c g -> g { children = c : children g }
+    insproms = \ps g -> g { promotes = ps ++ promotes g }
+    insdef = \nd g -> g { defs = nd : defs g }
 
-    incorp t g' =
-      do g <- g'
-         case t of
-           Inherit fp ps -> either (flip const) reimport ps
-                              <$> loadprog fp >>= flip inschild g
-           Bequeath ps -> insproms ps g
-           TermGroup h -> translate False h >>= flip inschild g
-           Define True p@(m,_) d -> insdef m d g >>= insproms [p]
-           Define False (m,_) d -> insdef m d g
-           Raw _ -> return g
+    incorp (Inherit fp ps) = either (flip const) ((=<<) . reimport) ps . inschild (loadprog fp)
+    incorp (Bequeath ps) = (insproms ps <$>)
+    incorp (TermGroup h) = inschild $ translate False h
+    incorp (Define b p@(m,_) d) = (insproms (if b then [p] else []) <$> insdef (m,d) <$>)
+    incorp _ = id
 
-reimport :: [(ID,ID)] -> ExprGroup -> ExprGroup
-reimport ps g = g { promotes = foldr f [] ps }
+reimport :: [(ID,ID)] -> ExprGroup -> IO ExprGroup
+reimport ps g = do ps' <- foldM f [] ps
+                   return g { promotes = ps' }
   where
     xm = M.fromList . map swap $ promotes g
-    f (m,n) qs = case M.lookup m xm of
-                   Just l -> (l,n) : qs
-                   Nothing -> error $ "Import error on: " ++ m
+    f qs (m,n) = case M.lookup m xm of
+                   Just l -> return $ (l,n) : qs
+                   Nothing -> throwIO $ ImportError "" m
 
 loadprog :: FilePath -> IO ExprGroup
 loadprog p = let (d,f) = splitFileName p
-             in withCurrentDirectory d $
+             in withCurrentDirectory d . imperrloc f $
                   loadterms f >>= translate True
 
+imperrloc :: FilePath -> IO ExprGroup -> IO ExprGroup
+imperrloc p = handle (throwIO . go)
+  where go (ImportError "" m) = ImportError p m
+        go e = e
+
 loadstr :: String -> IO ExprGroup
-loadstr s = case runParser terms s of
-              [(ts,"")] -> translate True ts
-              _ -> fail "Syntax error"
+loadstr s = let p = "(input)" in case runParser terms s of
+              [(ts,"")] -> imperrloc p $ translate True ts
+              _ -> throwIO $ SyntaxError p
 
 loadexpr :: String -> Maybe (Expr ID ID)
 loadexpr s = case runParser expr s of
                [(e,"")] -> Just e
                _ -> Nothing
+
+--- metacommands
+
+data Cmd = CLoad FilePath
+         | CGroup (Maybe String)
+         | CEval String
+         | CRun String
+
+cmd :: Parser Cmd
+cmd = largest . parse $ load <||> group <||> eval <||> run
+  where
+    load = symbol ":l" >> (CLoad <$> litstr '"' <||> litstr '\'' <||> sth)
+    group = symbol ":{" *> (CGroup <$> body <||> return Nothing)
+      where body = Just <$> sth <* symbol ":}"
+    eval = symbol ":e" >> CEval <$> sth
+    run = CRun <$> sth
+    sth = token $ many item
+
+
+data EvalMode = Manual | Automatic
+data Command = Load ExprGroup
+             | Eval EvalMode (Expr ID ID)
+data CBad = Incomplete
+          | Error String
+
+runcmd :: String -> IO (Either CBad Command)
+runcmd s = case runParser cmd s of
+             [(CGroup Nothing,_)] -> return . Left $ Incomplete
+             [(c,"")] -> handle go $ Right <$> runcmd' c
+             _ -> return . Left $ Error "Bad command"
+  where
+    go :: GroupException -> IO (Either CBad a)
+    go = return . Left . Error . displayException
+
+runcmd' :: Cmd -> IO Command
+runcmd' (CLoad p) = Load <$> loadprog p
+runcmd' (CGroup (Just s)) = Load <$> loadstr s
+runcmd' (CEval s) = runeval Manual s
+runcmd' (CRun s) = runeval Automatic s
+
+runeval mode s = case loadexpr s of
+                   Nothing -> throwIO $ SyntaxError "(input)"
+                   Just e -> return . Eval mode $ e
