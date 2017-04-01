@@ -201,7 +201,7 @@ inrestore c c' = c' {expd = expd c' `union` expd c}
 incollate :: AOS e r => Group e r -> (Int, CtxTemp e r) -> TempContext e r
 incollate g (n, c) = incombine c <$> incompile' n g
                                  >>= reexport (promotes g)
-                                 >>= return . (inrestore c . resolve <$>)
+                                 >>= return . (resolve . inrestore c <$>)
 
 incombine :: (Ord r, Show r) => CtxTemp e r -> (Int, CtxTemp e r) -> (Int, CtxTemp e r)
 incombine c (n', c') = (n', CtxTemp (syms c' `union` syms c) (expd c' `union` expd c))

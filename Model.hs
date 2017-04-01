@@ -246,6 +246,8 @@ unify c s@(Seq xs@(_:_)) e (n,m) = go Down <|> go Up
               guard . terminated c d $ Seq ys
               unifold c xs ys (n',m)
 
+unify _ (Label "_") _ nm = Just nm
+
 unify c (Label l) e (n,m) = (n,) <$> maybe (return $ M.insert l e m)
                                            (equivify m c e) (M.lookup l m)
 

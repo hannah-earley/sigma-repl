@@ -384,7 +384,7 @@ data Command = Load ExprGroup
 cmd :: Parser (IO Command)
 cmd = parse $ largest option
   where
-    option = noop <||> quit <||> info <||> load <||> group <||> limit <||> eval <||> run Automatic
+    option = noop <||> quit <||> info <||> load <||> group <||> limit <||> eval <||> run
 
     noop = pure Noop <$ parse eof
 
@@ -405,10 +405,14 @@ cmd = parse $ largest option
         limit' 0 = Nothing
         limit' n = Just (fromIntegral n)
 
-    eval = symbol ":e" >> run Manual
+    eval = symbol ":e" >> let err = throwIO $ SyntaxError "(input)"
+                          in (Eval Manual <$>) <$> maybe err return
+                                                . loadexpr <$> rest
 
-    run mode = let err = throwIO $ SyntaxError "(input)"
-               in (Eval mode <$>) <$> maybe err return . loadexpr <$> rest
+    run = do e <- rest
+             pure $ case loadexpr e of
+                      Nothing -> Load <$> loadstr e
+                      Just e' -> return $ Eval Automatic e'
 
     rest = token $ many item
 
