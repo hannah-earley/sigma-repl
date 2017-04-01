@@ -1,4 +1,5 @@
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Main where
 import Module
@@ -7,12 +8,13 @@ import Input
 
 import Data.Tuple (swap)
 import qualified Data.Map.Lazy as M
+import Control.Monad
+import Control.Monad.IO.Class
 import System.IO
 import System.Environment (getArgs)
-import Control.Exception (bracket, bracketOnError, displayException, catch, throwIO)
-import Control.Monad
-import System.Console.Haskeline (defaultSettings, getInputLine)
-import System.Console.Haskeline.IO (initializeInput, cancelInput, closeInput, queryInput, InputState)
+import Control.Exception (bracket, displayException, catch, throwIO)
+import System.Console.Haskeline (defaultSettings, getInputLine, outputStrLn,
+                              InputT, runInputT, withInterrupt, handleInterrupt)
 
 --- io helpers
 
@@ -32,12 +34,6 @@ withHiddenTerminalInput = bracket
 
    . const
 
-withHaskeline :: (InputState -> IO a) -> IO a
-withHaskeline go = bracketOnError
-                     (initializeInput defaultSettings)
-                     cancelInput
-                     (\hd -> go hd <* closeInput hd)
-
 getKey :: IO String
 getKey = do c <- getChar
             b <- hReady stdin
@@ -49,17 +45,17 @@ queryPos = putStr "\ESC[6n\n\ESC[A" >> getKey
 --- initiation
 
 main :: IO ()
-main = let argx = getArgs >>= foldM go emptyContext >>= dumpl
-       in catch argx handler >>= withHaskeline . loop'
+main = let argx = getArgs >>= foldM f emptyContext >>= dumpl
+       in catch argx handler >>= runInputT defaultSettings . withInterrupt . go
   where
-    go c p = loadprog p >>= either (throwIO . OtherError) return . incompile c
-    loop' ctx = loop $ Env {ctx, lim = Just 1000}
+    f c p = loadprog p >>= either (throwIO . OtherError) return . incompile c
+    go ctx = loop $ Env {ctx, lim = Just 1000}
 
-    handler :: InterpreterException -> IO (Context (Expr ID) ID)
-    handler e = do putStrLn "Error in loading CLI modules:"
-                   putStrLn $ " >>> " ++ displayException e
-                   putStrLn "Loaded: none\n"
-                   return emptyContext
+    handler e =
+      do putStrLn "Error in loading CLI modules:"
+         putStrLn $ " >>> " ++ displayException (e :: InterpreterException)
+         putStrLn "Loaded: none\n"
+         return emptyContext
 
     dumpl c = c <$ let loaded = unwords (M.keys $ exposed c)
                    in if null loaded then return ()
@@ -76,13 +72,14 @@ evalx (Env {ctx, lim = Nothing}) = exec ctx
 
 --- main logic
 
-loop :: Env -> InputState -> IO ()
-loop ctx hd = do cmd <- getInputCmd hd
-                 case cmd of
-                   Right Quit -> putStrLn "bye."
-                   Right Noop -> loop ctx hd
-                   Left e -> putStrLn (" [exception:] " ++ displayException e ++ "\n") >> loop ctx hd
-                   Right z -> goc ctx z <* putStrLn "" >>= flip loop hd
+loop :: Env -> InputT IO ()
+loop ctx = handleInterrupt (loop ctx) $
+           do cmd <- getInputCmd
+              case cmd of
+                Right Quit -> outputStrLn "bye."
+                Right Noop -> loop ctx
+                Left e -> outputStrLn (" [exception:] " ++ displayException e ++ "\n") >> loop ctx
+                Right z -> liftIO (goc ctx z) <* outputStrLn "" >>= loop
 
 goc :: Env -> Command -> IO Env
 goc _ Quit = error "bye."
@@ -96,7 +93,7 @@ goc c (Load g) = case incompile (ctx c) g of
 goc c (Eval mode e) = c <$ either (putStrLn . (" [error:] " ++)) (gox mode)
                                   (contextualise (ctx c) e)
   where
-    gox Manual x = explore c x
+    gox Manual x = liftIO $ explore c x
     gox Automatic x = do putStrLn . show . evalx c Up $ x
                          putStrLn . show . evalx c Down $ x
 goc c@(Env {ctx}) Info = c <$ dumpsyms ctx (doppels ctx)
@@ -144,15 +141,15 @@ explore' e x = getKey >>= print >> explore' e x
 prompt  = "σ> "
 prompt' = "σ| "
 
-getInputCmd :: InputState -> IO (Either InterpreterException Command)
+getInputCmd :: InputT IO (Either InterpreterException Command)
 getInputCmd = getInputCmd' prompt ""
 
-getInputCmd' :: String -> String -> InputState -> IO (Either InterpreterException Command)
-getInputCmd' pr prefix hd = do inp <- ((prefix ++) <$>) <$> queryInput hd (getInputLine pr)
-                               case inp of
-                                 Nothing -> return $ Right Quit
-                                 Just inp' ->
-                                   do cmd <- runcmd inp'
-                                      case cmd of
-                                        Left IncompleteParseError -> getInputCmd' prompt' inp' hd
-                                        _ -> return cmd
+getInputCmd' :: String -> String -> InputT IO (Either InterpreterException Command)
+getInputCmd' pr prefix = do inp <- ((prefix ++) <$>) <$> getInputLine pr
+                            case inp of
+                              Nothing -> return $ Right Quit
+                              Just inp' ->
+                                do cmd <- liftIO $ runcmd inp'
+                                   case cmd of
+                                     Left IncompleteParseError -> getInputCmd' prompt' inp'
+                                     _ -> return cmd
