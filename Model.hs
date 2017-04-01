@@ -6,7 +6,8 @@
 {-# LANGUAGE PatternSynonyms #-}
 
 module Model
-( Expr(..)
+( ID
+, Expr(..)
 , Expression
 , Direction(..)
 , bruijns

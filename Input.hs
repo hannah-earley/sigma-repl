@@ -1,13 +1,14 @@
 {-# LANGUAGE MonadComprehensions #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Input
 ( loadprog
 , loadstr
 , loadexpr
 , runcmd
-, CBad(..)
 , Command(..)
 , EvalMode(..)
+, InterpreterException(..)
 ) where
 
 import Data.Map.Lazy (Map)
@@ -28,6 +29,22 @@ import Control.Exception (catchJust)
 
 import Model (Expr(..))
 import Module (Group(..))
+
+---
+
+data InterpreterException = LocateError FilePath
+                          | SyntaxError FilePath
+                          | ImportError FilePath ID
+                          | IncompleteParseError
+                          | OtherError String
+                          deriving (Show, Typeable)
+
+instance Exception InterpreterException where
+  displayException (LocateError p) = "Couldn't locate: " ++ p
+  displayException (SyntaxError p) = "Syntax error in: " ++ p
+  displayException (ImportError p s) = "In: " ++ p ++ "; Couldn't import: " ++ s
+  displayException (IncompleteParseError) = "Unexpected end of input"
+  displayException (OtherError s) = s
 
 --- parser type
 
@@ -70,10 +87,15 @@ largest p = Parser $ \inp -> case runParser p inp of
                             []     -> []
                             (x:_) -> [x]
 
+eof :: Parser ()
+eof = Parser $ \inp -> case inp of
+                         "" -> [((),"")]
+                         _ -> []
+
 smallest :: Parser a -> Parser a
 smallest p = Parser $ \inp -> case runParser p inp of
-                            [] -> []
-                            ls -> [last ls]
+                                [] -> []
+                                ls -> [last ls]
 
 (<||>) :: Parser a -> Parser a -> Parser a
 p <||> q = largest $ p <|> q
@@ -89,6 +111,15 @@ sat :: (Char -> Bool) -> Parser Char
 sat p = [x | x <- item, p x]
 
 char x = sat (== x)
+
+between :: Ord a => a -> a -> a -> Bool
+between a b x = a <= x && x <= b
+
+-- lower = sat $ between 'a' 'z'
+-- upper = sat $ between 'A' 'Z'
+digit = sat $ between '0' '9'
+-- alpha = lower <|> upper
+-- alphanum = alpha <|> digit
 
 chars :: [Char] -> Parser Char
 chars cs = foldl (<|>) mzero $ map char cs
@@ -161,10 +192,10 @@ strlit c = brack [c,c] . many $ stresc <||> sat (/= c)
 litstr :: Char -> Parser String
 litstr = token . strlit
 
---- natural number literals
+canonstr :: Parser String
+canonstr = litstr '"' <||> litstr '\''
 
-digit :: Parser Char
-digit = sat (\x -> '0' <= x && x <= '9')
+--- natural number literal
 
 nat :: Parser Natural
 nat = read <$> largest (many1 digit)
@@ -248,9 +279,9 @@ terms = largest . parse $ many term
 
     inherit = all' <||> some'
       where
-        all' = env "inherit*" $ flip Inherit (Left ()) <$> path
+        all' = env "inherit*" $ flip Inherit (Left ()) <$> canonstr
         some' = env "inherit" $
-                liftM2 Inherit path (Right <$> many promoter)
+                liftM2 Inherit canonstr (Right <$> many promoter)
 
     bequeath = env "bequeath" $ Bequeath <$> many promoter
 
@@ -274,8 +305,6 @@ terms = largest . parse $ many term
 
     raw = Raw <$> expr
 
-    path = litstr '"' <||> litstr '\''
-
     promoter = labelgen (\l -> (l, l)) (,) variable
 
     env n p = brack "()" $ symbol n >> p
@@ -283,17 +312,6 @@ terms = largest . parse $ many term
 --- program translation
 
 type ExprGroup = Group (Expr ID) ID
-
-data GroupException = LocateError FilePath
-                    | SyntaxError FilePath
-                    | ImportError FilePath ID
-                    deriving (Show, Typeable)
-
-instance Exception GroupException where
-  displayException (LocateError p) = "Couldn't locate: " ++ p
-  displayException (SyntaxError p) = "Syntax error in: " ++ p
-  displayException (ImportError p s) = "In: " ++ p ++ "; Couldn't import: " ++ s
-
 
 trypaths :: [FilePath] -> IO String
 trypaths [] = error "trypaths: no paths to try"
@@ -317,7 +335,7 @@ translate = foldr incorp . pure . Group [] [] []
     insproms = \ps g -> g { promotes = ps ++ promotes g }
     insdef = \nd g -> g { defs = nd : defs g }
 
-    incorp (Inherit fp ps) = either (flip const) ((=<<) . reimport) ps . inschild (loadprog fp)
+    incorp (Inherit fp ps) = inschild . either (flip const) ((=<<) . reimport) ps $ loadprog fp
     incorp (Bequeath ps) = (insproms ps <$>)
     incorp (TermGroup h) = inschild $ translate False h
     incorp (Define b p@(m,_) d) = (insproms (if b then [p] else []) <$> insdef (m,d) <$>)
@@ -330,7 +348,7 @@ reimport ps g = do ps' <- foldM f [] ps
     xm = M.fromList . map swap $ promotes g
     f qs (m,n) = case M.lookup m xm of
                    Just l -> return $ (l,n) : qs
-                   Nothing -> throwIO $ ImportError "" m
+                   Nothing -> throwIO $ ImportError "" (m ++ " <> " ++ show g)
 
 loadprog :: FilePath -> IO ExprGroup
 loadprog p = let (d,f) = splitFileName p
@@ -354,43 +372,47 @@ loadexpr s = case runParser expr s of
 
 --- metacommands
 
-data Cmd = CLoad FilePath
-         | CGroup (Maybe String)
-         | CEval String
-         | CRun String
-
-cmd :: Parser Cmd
-cmd = largest . parse $ load <||> group <||> eval <||> run
-  where
-    load = symbol ":l" >> (CLoad <$> litstr '"' <||> litstr '\'' <||> sth)
-    group = symbol ":{" *> (CGroup <$> body <||> return Nothing)
-      where body = Just <$> sth <* symbol ":}"
-    eval = symbol ":e" >> CEval <$> sth
-    run = CRun <$> sth
-    sth = token $ many item
-
-
 data EvalMode = Manual | Automatic
+
 data Command = Load ExprGroup
              | Eval EvalMode (Expr ID ID)
-data CBad = Incomplete
-          | Error String
+             | Relimit (Either () (Maybe Int))
+             | Quit
+             | Info
+             | Noop
 
-runcmd :: String -> IO (Either CBad Command)
-runcmd s = case runParser cmd s of
-             [(CGroup Nothing,_)] -> return . Left $ Incomplete
-             [(c,"")] -> handle go $ Right <$> runcmd' c
-             _ -> return . Left $ Error "Bad command"
+cmd :: Parser (IO Command)
+cmd = parse $ largest option
   where
-    go :: GroupException -> IO (Either CBad a)
-    go = return . Left . Error . displayException
+    option = noop <||> quit <||> info <||> load <||> group <||> limit <||> eval <||> run Automatic
 
-runcmd' :: Cmd -> IO Command
-runcmd' (CLoad p) = Load <$> loadprog p
-runcmd' (CGroup (Just s)) = Load <$> loadstr s
-runcmd' (CEval s) = runeval Manual s
-runcmd' (CRun s) = runeval Automatic s
+    noop = pure Noop <$ parse eof
 
-runeval mode s = case loadexpr s of
-                   Nothing -> throwIO $ SyntaxError "(input)"
-                   Just e -> return . Eval mode $ e
+    quit = (symbol ":q" <||> symbol "quit" <||> symbol "exit") >> return (pure Quit)
+
+    info = symbol ":i" >> return (pure Info)
+
+    load = symbol ":l" >> (Load <$>) <$> loadprog <$> canonstr <||> rest
+
+    group1 = symbol ":{" *> ((Load <$>) <$> loadstr <$> rest) <* symbol ":}"
+    group2 = symbol ":{" >> rest >> (pure . throwIO $ IncompleteParseError)
+    group = group1 <||> group2
+
+    limit = symbol ":n" >> return . Relimit <$> limitn <||> limitq
+      where
+        limitn = Right . limit' <$> nat
+        limitq = pure $ Left ()
+        limit' 0 = Nothing
+        limit' n = Just (fromIntegral n)
+
+    eval = symbol ":e" >> run Manual
+
+    run mode = let err = throwIO $ SyntaxError "(input)"
+               in (Eval mode <$>) <$> maybe err return . loadexpr <$> rest
+
+    rest = token $ many item
+
+
+runcmd :: String -> IO (Either InterpreterException Command)
+runcmd (runParser cmd -> [(c,"")]) = handle (return . Left) $ Right <$> c
+runcmd _ = return . Left $ OtherError "Bad command"
