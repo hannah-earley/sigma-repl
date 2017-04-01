@@ -7,6 +7,7 @@
 module Module
 ( Aliasable(..)
 , aliasig
+, emptyContext
 , compile
 , incompile
 , contextualise
@@ -98,6 +99,9 @@ aliasig m = let m' = resolveSlotSlots m
                 refm r d = M.findWithDefault d r $ M.map sigm m'
             in \e -> maybe id refm (slotp e) (sigm e)
 
+aliasig' :: AOSO a r => Map r (a r) -> [[r]]
+aliasig' = groupAliases . M.toList . resolveSlotSlots
+
 --- type definitions
 
 data Group e r = Group { defs :: [(r, e r)]
@@ -108,6 +112,7 @@ data Group e r = Group { defs :: [(r, e r)]
 
 data Context e r = Context { symbols :: Map (r, Int) (e (r, Int))
                            , exposed :: Map r (r, Int)
+                           , doppels :: [[(r, Int)]]
                            , sigify :: e (r, Int) -> (Sig e, [Either (r,Int) Int])
                            , equivalentp :: e (r, Int) -> e (r, Int) -> Bool }
 
@@ -127,11 +132,14 @@ type AOS e r = (Aliasable e, Ord r, Show r)
 -- TODO: incompile shouldn't have to regenerate aliasig,
 --       this should be recomputed incrementally
 
+emptyContext :: AOSO e r => Context e r
+emptyContext = toContext $ CtxTemp M.empty M.empty
+
 compile :: (AOS e r, Ord (Sig e)) => Group e r -> CtxMaybe (Context e r)
 compile g = toContext . snd <$> compile' 0 g
 
 incompile :: (AOS e r, Ord (Sig e)) => Context e r -> Group e r -> CtxMaybe (Context e r)
-incompile c g = fromContext c >>= collate g >>= cap >>= return . toContext . snd
+incompile c g = fromContext c >>= incollate g >>= cap >>= return . toContext . snd
 
 contextualise :: AOS e r => Context e r -> e r -> CtxMaybe (e (r, Int))
 contextualise c e = let e' = reslot (resolutionMap (exposed c) . (,Nothing)) e
@@ -147,13 +155,14 @@ fromContext c = let c' = CtxTemp { syms = M.map (reslot wrapSym) $ symbols c
                                  , expd = exposed c }
                 in return (safeNum c', c')
 
-toContext :: (Aliasable e, Ord r, Ord (Sig e)) => CtxTemp e r -> Context e r
+toContext :: AOSO e r => CtxTemp e r -> Context e r
 toContext c = let syms' = M.map (reslot unwrapSym) $ syms c
                   sig' = aliasig syms'
               in Context { symbols = syms'
                          , exposed = expd c
+                         , doppels = aliasig' syms'
                          , sigify = sig'
-                         , equivalentp = \x y -> sig x == sig y }
+                         , equivalentp = \x y -> sig' x == sig' y }
 
 safeNum :: Aliasable e => CtxTemp e r -> Int
 safeNum c = succ . foldl' max 0 $ se c ++ ss c ++ sd c
@@ -180,6 +189,22 @@ combine c (n', c') = let reexps = keys $ expd c `intersection` expd c'
                      in if not $ null reexps then cecf "import" reexps
                         else return (n', CtxTemp (syms c `union` syms c')
                                                  (expd c `union` expd c'))
+
+--- incompilation
+
+incompile' :: AOS e r => Int -> Group e r -> TempContext e r
+incompile' n g = foldr (\x z -> z >>= collate x) (lift n g) (children g)
+
+inrestore :: Ord r => CtxTemp e r -> CtxTemp e r -> CtxTemp e r
+inrestore c c' = c' {expd = expd c' `union` expd c}
+
+incollate :: AOS e r => Group e r -> (Int, CtxTemp e r) -> TempContext e r
+incollate g (n, c) = incombine c <$> incompile' n g
+                                 >>= reexport (promotes g)
+                                 >>= return . (inrestore c . resolve <$>)
+
+incombine :: (Ord r, Show r) => CtxTemp e r -> (Int, CtxTemp e r) -> (Int, CtxTemp e r)
+incombine c (n', c') = (n', CtxTemp (syms c' `union` syms c) (expd c' `union` expd c))
 
 --- compilation helper functions
 
