@@ -71,7 +71,7 @@ pattern DataSeq a b <- Seq [Stop, a, b, Stop]
 showdat [Ref "cons", DataSeq x y] = "[" ++ unwords (show x : showdatl y) ++ "]"
 showdat [Ref "nil", Stop] = "[]"
 showdat [Ref "succ", n] = showdatn 1 n
-showdat [Ref "zero", _] = "0"
+showdat [Ref "zero", Stop] = "0"
 showdat d = "{" ++ showseq d ++ "}"
 
 showdatl (DataSeq (Ref "cons") (DataSeq x y)) = show x : showdatl y
@@ -226,6 +226,46 @@ permjoin Up p xs = Seq (p : xs)
 
 ---
 
+{-
+TODO: equivify on seqs should cycle detect (with bounded iteration)
+        if cyclic, check cycles are equal
+        if acyclic, check tops/bottoms are equal
+can we have an acyclic computation lacking both top and bottom?
+  define the integers, such that succ and pred are inverses
+  then <f m n g : g (p p' m #) (s s' n #) f>
+       <g (# m' p p') (# n' s s') f : f m' n' g>
+  is acyclic unbounded?
+thus we can't in general show sequence equivalence...
+but we can use a tortoise-hare algorithm to catch some
+equivalent sequences:
+  for seqs s and t, and i \in nat
+    check s[i] == t[2i] || s[2i] == t[i]
+                        || s[-i] == t[-2i]
+                        || s[-2i] == t[-i]
+this algorithm will terminate definitively for cyclic computations or
+acyclic computations with at least one bound, but will only terminate
+for acyclic unboundeds if s === t:
+
+if we additionally check s[i] == s[2i] and t[i] == t[2i] then we will
+catch s or t being cyclic/terminating and can respond appropriately
+
+therefore equivify s t = _|_ for acyclic unbounded s !== t,
+otherwise it terminates
+
+nevertheless, if s !== t and we're checking equivify, then the computation
+cannot proceed unless s === t; if we're in such a situation then it's a
+programming error, so _|_ is an appropriate response...
+
+---
+
+TODO: write a bounded iteration monad and rewrite the below in that style
+      - should this be a monad transformer, so that we can wrap context monad,
+        maybe monad etc in it?
+
+TODO: context monad
+
+-}
+
 equivify :: m ~ Map ID Expression => m -> Ctx -> Expression -> Expression -> Maybe m
 equivify m c e e' = if equivalentp c e e' then Just m else Nothing
 
@@ -262,6 +302,7 @@ unifold _ _ _ _ = Nothing
 
 substitute :: Map ID Expression -> Expression -> Expression
 substitute m (Label l) = M.findWithDefault (Label l) l m
+-- TODO: As should check quivalence of e and l...
 substitute m (As l e) = M.findWithDefault (substitute m e) l m
 substitute m (Seq s) = Seq $ map (substitute m) s
 substitute _ e = e
