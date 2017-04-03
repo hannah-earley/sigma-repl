@@ -3,47 +3,47 @@
 {-# LANGUAGE NamedFieldPuns #-}
 
 module Scope
-( Resolver(..)
-, stack
-, wrap
+( Context(..)
 , Scopy(..)
 , DefList(..)
 , ScopeGroup(..)
-, Private(..)
+, Restricted(..)
 , Insulated(..)
+, Scope(..)
 ) where
 
-import Data.Maybe (fromMaybe)
-import qualified Data.Map.Lazy as M
+import qualified Data.Map.Lazy as Map
 
 ---
 
-data Resolver r d = Resolver { runResolve :: r -> [(d, Resolver r d)] }
-
-stack :: (Ord r, Scope s) => s r d -> Resolver r d -> Resolver r d
-stack s c = Resolver $ \r -> case resolve (stack s c) s r of
-                               [] -> runResolve c r
-                               ds -> ds
-
-wrap :: (Ord r, Scope s) => s r d -> Resolver r d
-wrap s = Resolver $ get s
-
 class Scope a where
   exposed :: a r d -> [r]
-  resolve :: Ord r => Resolver r d -> a r d -> r -> [(d, Resolver r d)]
+  resolve :: Ord r => Context r d -> a r d -> r -> [(d, Context r d)]
+  get :: Ord r => a r d -> r -> [(d, Context r d)]
+  get = resolve $ Context { ctxExposed = [], ctxResolve = const [] }
 
-get :: (Scope a, Ord r) => a r d -> r -> [(d, Resolver r d)]
-get = resolve (Resolver $ const [])
+data Context r d = Context { ctxExposed :: [r]
+                           , ctxResolve :: r -> [(d, Context r d)] }
+instance Scope Context where
+  exposed = ctxExposed
+  resolve _ = ctxResolve
+  get = ctxResolve
+
+stack :: (Ord r, Scope s) => s r d -> Context r d -> Context r d
+stack s c = Context { ctxExposed = exposed s ++ exposed c
+                    , ctxResolve = \r -> case resolve c s r of
+                                           [] -> ctxResolve c r
+                                           ds -> ds }
 
 data Scopy r d = forall s. Scope s => MkScopy (s r d)
 instance Scope Scopy where
   exposed (MkScopy s) = exposed s
   resolve c (MkScopy s) = resolve c s
 
-newtype DefList r d = DefList { defs :: M.Map r [d] }
+newtype DefList r d = DefList { defs :: Map.Map r [d] }
 instance Scope DefList where
-  exposed l = M.keys . defs $ l
-  resolve c l r = map (,stack l c) . fromMaybe [] . M.lookup r . defs $ l
+  exposed l = Map.keys . defs $ l
+  resolve c l r = maybe [] (map (,stack l c)) . Map.lookup r . defs $ l
 
 newtype ScopeGroup r d = ScopeGroup { scopes :: [Scopy r d] }
 instance Scope ScopeGroup where
@@ -52,13 +52,13 @@ instance Scope ScopeGroup where
     let f s = resolve (stack g c) s r
     in concatMap f . scopes $ g
 
-data Private r d = forall s. Scope s =>
-                   Private { scope :: s r d , public :: [r] }
-instance Scope Private where
-  exposed = public
-  resolve c (Private {scope, public}) r
-    | r `elem` public = resolve c scope r
-    | otherwise       = []
+data Restricted r d = forall s. Scope s =>
+                      Restricted { scope :: s r d
+                                 , public :: Map.Map r r }
+instance Scope Restricted where
+  exposed = Map.keys . public
+  resolve c (Restricted {scope, public})
+    = maybe [] (resolve c scope) . flip Map.lookup public
 
 -- one-way mirror, defs inside can't refer to defs outside
 data Insulated r d = forall s. Scope s => Insulated (s r d)
@@ -68,8 +68,11 @@ instance Scope Insulated where
 
 {--- tests
 
+instance Show r => Show (Context r d) where
+  show = show . ctxExposed
+
 dl :: Ord r => [(r,d)] -> Scopy r d
-dl = MkScopy . DefList . M.fromListWith (++) . map (pure <$>)
+dl = MkScopy . DefList . Map.fromListWith (++) . map (pure <$>)
 
 ws = dl [(1,"a"),(2,"b"),(3,"c"),(4,"e")]
 xs = dl [(4,"d"),(5,"e"),(6,"f")]
@@ -78,10 +81,17 @@ zs = dl [(1,"j"),(2,"k"),(3,"l")]
 
 g = ScopeGroup [ws,zs]
 h = ScopeGroup [xs,ys]
-i = ScopeGroup $ [MkScopy h, ws, j, MkScopy p]
+i = ScopeGroup $ [MkScopy h, ws, j, MkScopy p, MkScopy q]
 
-p = Private (dl [(1,"p"),(10,"q"), (11, "r"), (12,"z")]) [1,11]
+private :: (Scope s, Ord r) => s r d -> [r] -> Restricted r d
+private s rs = Restricted s (Map.fromList $ zip rs rs)
+
+p = private (dl [(1,"p"),(10,"q"), (11, "r"), (12,"z")]) [1,11]
+q = Restricted (dl [(1,"m"),(2,"n"),(3,"o")]) $ Map.fromList [(13,1),(14,2),(7,3)]
 
 j = MkScopy $ Insulated zs
+
+go :: Ord r => Int -> [(d, Context r d)] -> r -> [(d, Context r d)]
+go n = get . snd . (!!n)
 
 ---}
