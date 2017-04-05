@@ -1,112 +1,104 @@
-{-# LANGUAGE ExistentialQuantification #-}
-
-module Scope (module Scope) where
+module Scope2
+( resolve
+, exposed
+, collect
+, Context
+, defines
+, group
+, restrict
+, protect
+, file
+) where
 
 import Data.List (nub)
+import Data.Maybe (catMaybes)
 import qualified Data.Map.Lazy as Map
-import Data.Map.Lazy ( Map, keys, unionsWith, unionWith
-                     , toList, fromList, findWithDefault )
 
 type Crumb = String
+type Context r d = (Scope r d, [Crumb], r, d)
+data Scope r d = Scope { discover :: [r] -> [r]
+                       , reveal :: [Context r d]
+                       , search :: SFn' r d }
 
-class Scope a where
-  exposed :: Eq r => a r d -> [r]
-  resolve :: Ord r => Context r d -> a r d -> r -> [(d, Context r d)]
-  get :: Ord r => a r d -> r -> [(d, Context r d)]
-  get = resolve empty
-  dups :: Ord r => Context r d -> a r d -> Map r [[Crumb]]
+instance (Show r) => Show (Scope r d) where
+  show = show . exposed
 
--- 
-data Context r d =
-  Context { ctxTrail :: [Crumb]
-          , ctxExposed :: [r]
-          , ctxResolve :: r -> [(d, Context r d)]
-          , ctxDups :: Map r [[Crumb]] }
-instance Scope Context where
-  exposed = ctxExposed
-  resolve _ = get
-  get = ctxResolve
-  dups _ = ctxDups
+type SFn' r d = r -> RFn' (Context r d)
+type RFn' a = Maybe a -> (a -> Maybe a) -> Maybe a
 
--- type coercion
-data Scopy r d = forall s. Scope s => MkScopy (s r d)
-instance Scope Scopy where
-  exposed (MkScopy s) = exposed s
-  resolve c (MkScopy s) = resolve c s
-  dups c (MkScopy s) = dups c s
+--- scope types
 
--- scope primitive
-newtype DefList r d = DefList { defs :: Map r [d] }
-instance Scope DefList where
-  exposed l = keys . defs $ l
+defines :: Ord r => Map.Map r d -> Scope r d
+defines ds = s
+  where
+    s = Scope { discover = (Map.keys ds ++)
+              , reveal = map lift $ Map.toList ds
+              , search = go $ flip Map.lookup ds }
+    go m = \r f g -> maybe f (g . lift . (,) r) $ m r
+    lift (r,d) = (s,[],r,d)
 
-  resolve c l r = zipWith (flip (,) . stack l c) [1..]
-                    . findWithDefault [] r $ defs l
+group :: Eq r => [Scope r d] -> Maybe (Scope r d)
+group ss = if uniquep (exposed t) then Just t else Nothing
+  where
+    ss' = zipWith hansel [1..] ss
+    search' r f g = maybe f (g . stackx t)
+                  . just 1 $ map (flip resolve r) ss'
+    t = Scope { discover = (concatMap exposed ss ++)
+              , reveal = concatMap reveal ss'
+              , search = search' }
 
-  dups c l = dups' (resolve c l) (exposed l)
+  -- can look out, but only partially in
+restrict :: Ord r => Scope r d -> Map.Map r r -> Scope r d
+restrict s m = s { discover = map fst . disc, search = search' }
+  where
+    disc b = filter ((`elem` discover s b) . snd) $ Map.toList m
+    search' r f g = maybe f (\r' -> search s r' f g) $ Map.lookup r m
 
--- scope combiner
-newtype ScopeGroup r d = ScopeGroup { scopes :: [Scopy r d] }
-instance Scope ScopeGroup where
-  exposed = concatMap exposed . scopes
+  -- can look in, but not out
+protect :: Scope r d -> Scope r d
+protect s = t
+  where
+    t = s { discover = const (exposed s)
+          , search = \r _ _ -> stackx t <$> resolve s r }
 
-  resolve c g r = let f (n,s) = resolve (stack g c n) s r
-                  in concatMap f . zip [1..] $ scopes g
+file :: Ord r => String -> Map.Map r r -> Scope r d -> Scope r d
+file f m s = gretel f . protect $ restrict s m
 
-  dups c g = let subs = zipWith (dups . stack g c) [1..] (scopes g)
-                 collisions = dups' (resolve c g) (exposed g)
-             in Map.map nub . unionsWith (++) $ collisions : subs
+--- scope accessors
 
--- limit exposure and allows symbol renaming
--- note that you can also reëxport a symbol
--- multiple times under multiple names
-data Restricted r d = forall s. Scope s =>
-  Restricted { scope :: s r d, public :: Map r r }
-instance Scope Restricted where
-  exposed (Restricted {scope = s, public = p})
-    = map fst . filter (flip elem (exposed s) . snd) $ toList p
+resolve :: Scope r d -> r -> Maybe (Context r d)
+resolve s r = search s r Nothing Just
 
-  resolve c (Restricted {scope = s, public = p})
-    = maybe [] (resolve c s) . flip Map.lookup p
+exposed :: Scope r d -> [r]
+exposed s = discover s []
 
-  dups c (Restricted {scope = s}) = dups c s
-
--- one-way mirror, defs inside can't refer to defs outside
-data Insulated r d = forall s. Scope s => Insulated (s r d)
-instance Scope Insulated where
-  exposed (Insulated s) = exposed s
-  resolve c (Insulated s) = resolve (empty {ctxTrail = ctxTrail c}) s
-  dups c (Insulated s) = dups c s
-
--- automates (see mkFile) insulating restriction of a given scope,
--- and crucially, allows naming the scope for error messages...
-data File r d = File { name :: String, contents :: Insulated r d }
-instance Scope File where
-  exposed = exposed . contents
-  resolve c f = resolve (gretel c $ name f) $ contents f
-  dups c f = dups (gretel c $ name f) $ contents f
+collect :: Scope r d -> [Context r d]
+collect = reveal
 
 --- helper functions
 
-gretel :: Context r d -> Crumb -> Context r d
-gretel ctx cr = ctx {ctxTrail = cr : ctxTrail ctx}
+stack :: Scope r d -> Scope r d -> Scope r d
+s `stack` t =
+  Scope { discover = discover s . discover t
+        , reveal = reveal s ++ reveal t
+        , search = \r f g -> search s r (search t r f g) (g . stackx t) }
 
-dups' :: Ord r => (r -> [(a, Context r d)]) -> [r] -> Map.Map r [[Crumb]]
-dups' rf xs = let f r = (r, map (reverse . ctxTrail . snd) $ rf r)
-              in fromList . filter ((>1) . length . snd) $ map f xs
+gretel :: Crumb -> Scope r d -> Scope r d
+gretel c s = let wrap (t, cs, r, d) = (t, c:cs, r, d)
+             in s { reveal = map wrap $ reveal s
+                  , search = \r f g -> fmap wrap $ search s r f g }
 
-empty :: Context r d
-empty = Context [] [] (const []) Map.empty
+hansel :: Show a => a -> Scope r d -> Scope r d
+hansel = gretel . show
 
-stack :: (Ord r, Scope s) => s r d -> Context r d -> Int -> Context r d
-stack s c n = Context { ctxTrail = show n : ctxTrail c
-                      , ctxExposed = exposed s ++ exposed c
-                      , ctxResolve = \r -> case resolve c s r of
-                                             [] -> ctxResolve c r
-                                             ds -> ds
-                      , ctxDups = unionWith (++) (ctxDups c) (dups c s) }
+stackx :: Scope r d -> Context r d -> Context r d
+stackx t (s, cs, r, d) = (s `stack` t, cs, r, d)
 
-mkFile :: Scope s => String -> Map r r -> s r d -> File r d
-mkFile name' public' scope' =
-  let r = Restricted { scope = scope' , public = public' }
-  in File { name = name', contents = Insulated r }
+uniquep :: Eq a => [a] -> Bool
+uniquep l = length l == length (nub l)
+
+just1 :: [Maybe a] -> Maybe a
+just1 xs = case catMaybes xs of 
+             [] -> Nothing
+             [x] -> Just x
+             _ -> error "error: competing definitions"
