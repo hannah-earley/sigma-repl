@@ -1,97 +1,112 @@
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE NamedFieldPuns #-}
 
-module Scope
-( Context(..)
-, Scopy(..)
-, DefList(..)
-, ScopeGroup(..)
-, Restricted(..)
-, Insulated(..)
-, Scope(..)
-) where
+module Scope (module Scope) where
 
+import Data.List (nub)
 import qualified Data.Map.Lazy as Map
+import Data.Map.Lazy ( Map, keys, unionsWith, unionWith
+                     , toList, fromList, findWithDefault )
 
----
+type Crumb = String
 
 class Scope a where
-  exposed :: a r d -> [r]
+  exposed :: Eq r => a r d -> [r]
   resolve :: Ord r => Context r d -> a r d -> r -> [(d, Context r d)]
   get :: Ord r => a r d -> r -> [(d, Context r d)]
-  get = resolve $ Context { ctxExposed = [], ctxResolve = const [] }
+  get = resolve empty
+  dups :: Ord r => Context r d -> a r d -> Map r [[Crumb]]
 
-data Context r d = Context { ctxExposed :: [r]
-                           , ctxResolve :: r -> [(d, Context r d)] }
+-- 
+data Context r d =
+  Context { ctxTrail :: [Crumb]
+          , ctxExposed :: [r]
+          , ctxResolve :: r -> [(d, Context r d)]
+          , ctxDups :: Map r [[Crumb]] }
 instance Scope Context where
   exposed = ctxExposed
-  resolve _ = ctxResolve
+  resolve _ = get
   get = ctxResolve
+  dups _ = ctxDups
 
-stack :: (Ord r, Scope s) => s r d -> Context r d -> Context r d
-stack s c = Context { ctxExposed = exposed s ++ exposed c
-                    , ctxResolve = \r -> case resolve c s r of
-                                           [] -> ctxResolve c r
-                                           ds -> ds }
-
+-- type coercion
 data Scopy r d = forall s. Scope s => MkScopy (s r d)
 instance Scope Scopy where
   exposed (MkScopy s) = exposed s
   resolve c (MkScopy s) = resolve c s
+  dups c (MkScopy s) = dups c s
 
-newtype DefList r d = DefList { defs :: Map.Map r [d] }
+-- scope primitive
+newtype DefList r d = DefList { defs :: Map r [d] }
 instance Scope DefList where
-  exposed l = Map.keys . defs $ l
-  resolve c l r = maybe [] (map (,stack l c)) . Map.lookup r . defs $ l
+  exposed l = keys . defs $ l
 
+  resolve c l r = zipWith (flip (,) . stack l c) [1..]
+                    . findWithDefault [] r $ defs l
+
+  dups c l = dups' (resolve c l) (exposed l)
+
+-- scope combiner
 newtype ScopeGroup r d = ScopeGroup { scopes :: [Scopy r d] }
 instance Scope ScopeGroup where
-  exposed g = concatMap exposed . scopes $ g
-  resolve c g r = 
-    let f s = resolve (stack g c) s r
-    in concatMap f . scopes $ g
+  exposed = concatMap exposed . scopes
 
+  resolve c g r = let f (n,s) = resolve (stack g c n) s r
+                  in concatMap f . zip [1..] $ scopes g
+
+  dups c g = let subs = zipWith (dups . stack g c) [1..] (scopes g)
+                 collisions = dups' (resolve c g) (exposed g)
+             in Map.map nub . unionsWith (++) $ collisions : subs
+
+-- limit exposure and allows symbol renaming
+-- note that you can also reëxport a symbol
+-- multiple times under multiple names
 data Restricted r d = forall s. Scope s =>
-                      Restricted { scope :: s r d
-                                 , public :: Map.Map r r }
+  Restricted { scope :: s r d, public :: Map r r }
 instance Scope Restricted where
-  exposed = Map.keys . public
-  resolve c (Restricted {scope, public})
-    = maybe [] (resolve c scope) . flip Map.lookup public
+  exposed (Restricted {scope = s, public = p})
+    = map fst . filter (flip elem (exposed s) . snd) $ toList p
+
+  resolve c (Restricted {scope = s, public = p})
+    = maybe [] (resolve c s) . flip Map.lookup p
+
+  dups c (Restricted {scope = s}) = dups c s
 
 -- one-way mirror, defs inside can't refer to defs outside
 data Insulated r d = forall s. Scope s => Insulated (s r d)
 instance Scope Insulated where
   exposed (Insulated s) = exposed s
-  resolve _ (Insulated s) = get s
+  resolve c (Insulated s) = resolve (empty {ctxTrail = ctxTrail c}) s
+  dups c (Insulated s) = dups c s
 
-{--- tests
+-- automates (see mkFile) insulating restriction of a given scope,
+-- and crucially, allows naming the scope for error messages...
+data File r d = File { name :: String, contents :: Insulated r d }
+instance Scope File where
+  exposed = exposed . contents
+  resolve c f = resolve (gretel c $ name f) $ contents f
+  dups c f = dups (gretel c $ name f) $ contents f
 
-instance Show r => Show (Context r d) where
-  show = show . ctxExposed
+--- helper functions
 
-dl :: Ord r => [(r,d)] -> Scopy r d
-dl = MkScopy . DefList . Map.fromListWith (++) . map (pure <$>)
+gretel :: Context r d -> Crumb -> Context r d
+gretel ctx cr = ctx {ctxTrail = cr : ctxTrail ctx}
 
-ws = dl [(1,"a"),(2,"b"),(3,"c"),(4,"e")]
-xs = dl [(4,"d"),(5,"e"),(6,"f")]
-ys = dl [(7,"g"),(8,"h"),(9,"i")]
-zs = dl [(1,"j"),(2,"k"),(3,"l")]
+dups' :: Ord r => (r -> [(a, Context r d)]) -> [r] -> Map.Map r [[Crumb]]
+dups' rf xs = let f r = (r, map (reverse . ctxTrail . snd) $ rf r)
+              in fromList . filter ((>1) . length . snd) $ map f xs
 
-g = ScopeGroup [ws,zs]
-h = ScopeGroup [xs,ys]
-i = ScopeGroup $ [MkScopy h, ws, j, MkScopy p, MkScopy q]
+empty :: Context r d
+empty = Context [] [] (const []) Map.empty
 
-private :: (Scope s, Ord r) => s r d -> [r] -> Restricted r d
-private s rs = Restricted s (Map.fromList $ zip rs rs)
+stack :: (Ord r, Scope s) => s r d -> Context r d -> Int -> Context r d
+stack s c n = Context { ctxTrail = show n : ctxTrail c
+                      , ctxExposed = exposed s ++ exposed c
+                      , ctxResolve = \r -> case resolve c s r of
+                                             [] -> ctxResolve c r
+                                             ds -> ds
+                      , ctxDups = unionWith (++) (ctxDups c) (dups c s) }
 
-p = private (dl [(1,"p"),(10,"q"), (11, "r"), (12,"z")]) [1,11]
-q = Restricted (dl [(1,"m"),(2,"n"),(3,"o")]) $ Map.fromList [(13,1),(14,2),(7,3)]
-
-j = MkScopy $ Insulated zs
-
-go :: Ord r => Int -> [(d, Context r d)] -> r -> [(d, Context r d)]
-go n = get . snd . (!!n)
-
----}
+mkFile :: Scope s => String -> Map r r -> s r d -> File r d
+mkFile name' public' scope' =
+  let r = Restricted { scope = scope' , public = public' }
+  in File { name = name', contents = Insulated r }
