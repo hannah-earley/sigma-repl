@@ -1,7 +1,9 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 
-import Scope2
+module Test (module Test) where
+
+import Scope
 import Data.List (intercalate)
 import Data.Maybe (fromJust)
 import qualified Data.Map.Lazy as Map
@@ -9,7 +11,7 @@ import qualified Data.Map.Lazy as Map
 --- scopes
 
 instance {-# OVERLAPS #-} (Show r, Show d) => Show (Context r d) where
-  show (s, cs, r, d) = "<" ++ e ++ " | " ++ c ++ " | "
+  show (Context s cs r d) = "<" ++ e ++ " | " ++ c ++ " | "
                            ++ show r ++ " -> " ++ show d ++ ">\n"
     where
       e = show $ exposed s
@@ -37,5 +39,5 @@ j = protect q
 k = file "k.sig" (Map.fromList $ zip [0..6] [1..7]) i
 
 go :: Ord r => Maybe (Context r d) -> r -> Maybe (Context r d)
-go (Just (s, _, _, _)) = resolve s
+go (Just (Context s _ _ _)) = resolve s
 go Nothing = const Nothing
