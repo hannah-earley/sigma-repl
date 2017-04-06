@@ -1,21 +1,29 @@
-module Scope2
+{-# LANGUAGE ViewPatterns #-}
+
+module Scope
 ( resolve
 , exposed
 , collect
-, Context
+, Context(..)
 , defines
 , group
 , restrict
 , protect
 , file
+, shadow
 ) where
 
-import Data.List (nub)
+import Data.List (nub, stripPrefix)
 import Data.Maybe (catMaybes)
 import qualified Data.Map.Lazy as Map
 
 type Crumb = String
-type Context r d = (Scope r d, [Crumb], r, d)
+
+data Context r d = Context { scope :: Scope r d
+                           , trail :: [Crumb]
+                           , ref :: r
+                           , def :: d }
+
 data Scope r d = Scope { discover :: [r] -> [r]
                        , reveal :: [Context r d]
                        , search :: SFn' r d }
@@ -34,15 +42,15 @@ defines ds = s
     s = Scope { discover = (Map.keys ds ++)
               , reveal = map lift $ Map.toList ds
               , search = go $ flip Map.lookup ds }
-    go m = \r f g -> maybe f (g . lift . (,) r) $ m r
-    lift (r,d) = (s,[],r,d)
+    go m r f g = maybe f (g . lift . (,) r) $ m r
+    lift (r,d) = Context s [] r d
 
 group :: Eq r => [Scope r d] -> Maybe (Scope r d)
 group ss = if uniquep (exposed t) then Just t else Nothing
   where
-    ss' = zipWith hansel [1..] ss
+    ss' = zipWith (gretel . show) [1..] ss
     search' r f g = maybe f (g . stackx t)
-                  . just 1 $ map (flip resolve r) ss'
+                  . just1 $ map (`resolve` r) ss'
     t = Scope { discover = (concatMap exposed ss ++)
               , reveal = concatMap reveal ss'
               , search = search' }
@@ -64,6 +72,15 @@ protect s = t
 file :: Ord r => String -> Map.Map r r -> Scope r d -> Scope r d
 file f m s = gretel f . protect $ restrict s m
 
+  -- intended to be used for repl input
+shadow :: Scope r d -> Scope r d -> Scope r d
+s `shadow` t = hansel go $ s `stack` protect t
+  where
+    go ("(input)":cs) = "(input-1)" : cs
+    go ((fmap reads . stripPrefix "(input-)" -> Just [(n,")")]) : cs)
+      = (:cs) $ "(input-" ++ show (n+1) ++ ")"
+    go cs = "(input)" : cs
+
 --- scope accessors
 
 resolve :: Scope r d -> r -> Maybe (Context r d)
@@ -83,22 +100,22 @@ s `stack` t =
         , reveal = reveal s ++ reveal t
         , search = \r f g -> search s r (search t r f g) (g . stackx t) }
 
-gretel :: Crumb -> Scope r d -> Scope r d
-gretel c s = let wrap (t, cs, r, d) = (t, c:cs, r, d)
-             in s { reveal = map wrap $ reveal s
-                  , search = \r f g -> fmap wrap $ search s r f g }
+hansel :: ([Crumb] -> [Crumb]) -> Scope r d -> Scope r d
+hansel wf s = let wf' ctx = ctx { trail = wf $ trail ctx }
+              in s { reveal = map wf' $ reveal s
+                   , search = \r f g -> wf' <$> search s r f g}
 
-hansel :: Show a => a -> Scope r d -> Scope r d
-hansel = gretel . show
+gretel :: Crumb -> Scope r d -> Scope r d
+gretel = hansel . (:)
 
 stackx :: Scope r d -> Context r d -> Context r d
-stackx t (s, cs, r, d) = (s `stack` t, cs, r, d)
+stackx t ctx = ctx { scope = scope ctx `stack` t }
 
 uniquep :: Eq a => [a] -> Bool
 uniquep l = length l == length (nub l)
 
 just1 :: [Maybe a] -> Maybe a
-just1 xs = case catMaybes xs of 
+just1 xs = case catMaybes xs of
              [] -> Nothing
              [x] -> Just x
              _ -> error "error: competing definitions"

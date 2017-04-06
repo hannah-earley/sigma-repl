@@ -1,7 +1,7 @@
 module Main where
 
 import Scope()
-import Model()
+--import Model()
 
 main :: IO ()
 main = putStrLn "Hello, Haskell!"
