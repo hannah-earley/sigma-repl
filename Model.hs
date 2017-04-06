@@ -5,26 +5,12 @@ module Model
 ( module Model
 ) where
 
+import Common (acyclicp, shows', initlast)
 import qualified Scope as S
 import qualified Data.Map.Lazy as M
-import qualified Data.Graph as G
 import Data.List (nub)
 import Control.Monad (foldM, join, guard)
 import Data.Function (on)
-
---- helper functions
-
-acyclicp :: Ord k => [(n, k, [k])] -> Bool
-acyclicp = all ((<=1) . length . G.flattenSCC) . G.stronglyConnComp
-
-shows' :: Show a => [a] -> String
-shows' = unwords . map show
-
-initlast :: [a] -> Maybe ([a],a)
-initlast = foldr go Nothing
-  where
-    go x Nothing = Just ([],x)
-    go x (Just (is,l)) = Just (x:is,l)
 
 --- nice names
 
