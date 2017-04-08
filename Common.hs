@@ -6,6 +6,11 @@ import qualified Data.Graph as G
 import Control.Monad (liftM2)
 import Data.Foldable (foldl')
 
+--- Sets
+
+unions :: (Foldable t, Ord a) => t (S.Set a) -> S.Set a
+unions = foldl' S.union S.empty
+
 --- Partitioning
 
 type Partition a = S.Set (S.Set a)
@@ -20,11 +25,14 @@ partition :: (Ord a, Ord b) => (a -> b) -> S.Set a -> Partition a
 partition f = S.fromList . map S.fromList . M.elems . M.fromListWith (++)
                          . map (liftM2 (,) f pure) . S.toList
 
-repartition :: (Ord a, Ord b) => (a -> b) -> Partition a -> Partition a
-repartition = (foldl' S.union S.empty .) . S.map . partition
+subpartition :: (Ord a, Ord b) => (a -> b) -> Partition a -> Partition a
+subpartition = (unions .) . S.map . partition
 
-index :: Ord a => Partition a -> a -> Int
-index = (M.!) . M.fromList . concat . zipWith (map . flip (,)) [0..] . plists
+repartition :: (Ord a, Ord b) => (a -> b) -> Partition a -> Partition a
+repartition = (. unions) . partition
+
+index :: Ord a => Partition a -> M.Map a Int
+index = M.fromList . concat . zipWith (map . flip (,)) [0..] . plists
 
 --- Control
 
