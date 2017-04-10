@@ -1,5 +1,6 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module Model2
 ( module Model2
@@ -9,6 +10,8 @@ import Data.Function (on)
 import qualified Data.Map.Lazy as M
 import qualified Scope as S
 import Common (shows', initlast)
+import GHC.Generics (Generic)
+import Data.Hashable
 
 type ID = String
 type Hash = Int
@@ -81,12 +84,18 @@ bruijns = snd . foldl go (1, M.empty)
         Just _ -> (n,m)
     go nm _ = nm
 
-data Sig = Sig [SExpr] [SExpr] deriving (Eq, Ord)
+--- signature representations
+
+data Sig = Sig [SExpr] [SExpr]
+         deriving (Eq, Ord, Generic)
 
 data SExpr = SSeq [SExpr]
            | SLabel Int
            | SPerm
-           deriving (Eq, Ord)
+           deriving (Eq, Ord, Generic)
+
+instance Hashable SExpr
+instance Hashable Sig
 
 sig :: Perm -> Sig
 sig (Perm _ l r) = (Sig `on` map go) l r
