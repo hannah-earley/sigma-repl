@@ -5,6 +5,7 @@ module Scope
 , exposed
 , collect
 , Context(..)
+, Scope(..)
 , defines
 , group
 , restrict
