@@ -2,8 +2,8 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE DeriveGeneric #-}
 
-module Model2
-( module Model2
+module Model
+( module Model
 ) where
 
 import Data.Function (on)
