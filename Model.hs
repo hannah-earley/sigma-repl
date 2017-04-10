@@ -1,163 +1,113 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE DeriveGeneric #-}
 
-module Model
-( module Model
+module Model2
+( module Model2
 ) where
 
-import Common (acyclicp, shows', initlast)
-import qualified Scope as S
-import qualified Data.Map.Lazy as M
-import Data.List (nub)
-import Control.Monad (foldM, join, guard)
 import Data.Function (on)
-
---- nice names
+import qualified Data.Map.Lazy as M
+import qualified Scope as S
+import Common (shows', initlast)
+import GHC.Generics (Generic)
+import Data.Hashable
 
 type ID = String
 type Hash = Int
-type Expr = ETerm
+data Named = ByLabel ID
+           | ByRef ID
+           | Anon
 
---- references
+data Expr = ESeq Named [Expr]
+          | EPerm PRef
 
-data Ref = Ref (Maybe Hash) Def
+data PID = PID { signature :: Hash
+               , identifier :: Int }
 
-instance Show Ref where
-  show (Ref _ d) = show d
+data PRef = Local Perm
+          | Remote (S.Context ID Perm)
 
-data Def = Anon Expr
-         | Ext (S.Context ID Expr)
+data Perm = Perm PID [PExpr] [PExpr]
 
-instance Show Def where
-  show (Anon e) = show e
-  show (Ext c) = "`" ++ S.ref c
+data PExpr = PSeq Named [PExpr]
+           | PLabel ID
+           | PPerm PRef
 
---- sequence expression
+--- output
 
-data ETerm = ESeq [ETerm]
-           | EPerm Perm
-           | ERef Ref
+instance Show Expr where
+  show (ESeq (ByRef r) _) = "`" ++ r
+  show (ESeq (ByLabel l) e) = l ++ "@" ++ show (ESeq Anon e)
+  show (ESeq _ e) = "(" ++ shows' e ++ ")"
+  show (EPerm p) = show p
 
-instance Show ETerm where
- show = show . lift
-
-lift :: ETerm -> ATerm
-lift (ESeq ts) = ASeq $ map lift ts
-lift (EPerm p) = APerm' p
-lift (ERef r) = ARef r
-
---- unified permutation
-
-data Perm = Perm APerm FPerm
+instance Show PRef where
+  show (Local p) = show p
+  show (Remote c) = "`" ++ S.ref c
 
 instance Show Perm where
-  show (Perm p _) = show p
+  show (Perm _ l r) = "<_ " ++ shows' l ++ " : " ++ shows' r ++ " _>"
 
---- permutation with as-expressions (for display)
+instance Show PExpr where
+  show (PSeq (ByRef r) _) = "`" ++ r
+  show (PSeq (ByLabel l) e) = l ++ "@" ++ show (PSeq Anon e)
+  show (PSeq _ []) = "#"
+  show (PSeq _ (getdat -> Just d)) = showdat d
+  show (PSeq _ s) = "(" ++ shows' s ++ ")"
+  show (PLabel l) = l
+  show (PPerm p) = show p
 
-data APerm = APerm [ATerm] [ATerm]
+getdat :: [PExpr] -> Maybe [PExpr]
+getdat (initlast -> Just (PSeq _ [] : d, PSeq _ [])) = Just d
+getdat _ = Nothing
 
-instance Show APerm where
-  show (APerm l r) = "<_ " ++ shows' l ++ " : " ++ shows' r ++ " _>"
-
-data ATerm = ASeq [ATerm]
-           | ALabel ID (Maybe ATerm)
-           | APerm' Perm
-           | ARef Ref
-
-pattern AStop :: ATerm
-pattern AStop = ASeq []
-
-instance Show ATerm where
-  show AStop = "#"
-  show (ASeq (initlast -> Just (AStop : d, AStop))) = showdat d
-  show (ASeq s) = "(" ++ unwords (map show s) ++ ")"
-  show (ALabel l Nothing) = l
-  show (ALabel l (Just e)) = l ++ "@" ++ show e
-  show (APerm' p) = show p
-  show (ARef r) = show r
-
-showdat :: [ATerm] -> String
+showdat :: [PExpr] -> String
 showdat d = "{" ++ shows' d ++ "}"
 
---- compile as-perm to flat-perm
+--- perm representations
 
-pcompile :: APerm -> Maybe Perm
-pcompile p = Perm p <$> flatten p
+deref :: PRef -> Perm
+deref (Local p) = p
+deref (Remote c) = S.def c
 
-build :: M.Map ID ATerm -> ATerm -> Maybe (M.Map ID ATerm)
-build m (ASeq s) = foldM build m s
-build m (ALabel l (Just e)) =
-  case M.lookup l m of
-    Just _ -> Nothing
-    Nothing -> build (M.insert l e m) e
-build m _ = Just m
+identify :: Perm -> Int
+identify (Perm i _ _) = identifier i
 
-depgraph :: M.Map ID ATerm -> [(ID, ID, [ID])]
-depgraph = map (uncurry $ join (,,)) . M.toList . M.map (nub . go)
+bruijns :: [PExpr] -> M.Map ID Int
+bruijns = snd . foldl go (1, M.empty)
   where
-    go (ASeq s) = concatMap go s
-    go (ALabel l _) = [l]
-    go _ = []
-
-flatten :: APerm -> Maybe FPerm
-flatten (APerm l r) = do m <- foldM build M.empty $ l ++ r
-                         guard . acyclicp $ depgraph m
-                         return $ flatten' m l r
-
-flatten' :: M.Map ID ATerm -> [ATerm] -> [ATerm] -> FPerm
-flatten' m = FPerm `on` map go
-  where
-    go (ASeq s) = FSeq $ map go s
-    go (ALabel l' _) = maybe (FLabel l') go $ M.lookup l' m
-    go (APerm' p) = FPerm' p
-    go (ARef r) = FRef r
-
---- 'flat' permutation without as-expressions
-
-data FPerm = FPerm [FTerm] [FTerm]
-
-data FTerm = FSeq [FTerm]
-           | FLabel ID
-           | FPerm' Perm
-           | FRef Ref
-
-bruijns :: [FTerm] -> M.Map ID Int
-bruijns = snd . foldl go (1,M.empty)
-  where
-    go nm (FSeq s) = foldl go nm s
-    go (n,m) (FLabel l') =
-      case M.lookup l' m of
-        Nothing -> (n+1, M.insert l' n m)
+    go nm (PSeq _ s) = foldl go nm s
+    go (n,m) (PLabel l) =
+      case M.lookup l m of
+        Nothing -> (n+1, M.insert l n m)
         Just _ -> (n,m)
     go nm _ = nm
 
---- signature sequence
+--- signature representations
 
-data STerm = SSeq [STerm]
+data Sig = Sig [SExpr] [SExpr]
+         deriving (Eq, Ord, Generic)
+
+data SExpr = SSeq [SExpr]
            | SLabel Int
-           | SPerm [STerm] [STerm]
-           | SRef Ref
+           | SPerm
+           deriving (Eq, Ord, Generic)
 
-instance Eq STerm where
-  SSeq xs == SSeq ys = xs == ys
-  SLabel m == SLabel n = m == n
-  SPerm a b == SPerm c d = a == b && c == d
-  SRef _ == SRef _ = True
+instance Hashable SExpr
+instance Hashable Sig
 
-sige' :: ETerm -> STerm
-sige' = sigp' . lift
-
-sigp' :: ATerm -> STerm
-sigp' (ASeq s) = SSeq $ map sigp' s
-sigp' (APerm' (Perm _ f)) = sigf' f
-sigp' (ARef r) = SRef r
-
-sigf' :: FPerm -> STerm
-sigf' (FPerm l r) = let m = bruijns $ l ++ r
-                    in on SPerm (map $ go m) l r
+sig :: Perm -> Sig
+sig (Perm _ l r) = (Sig `on` map go) l r
   where
-    go m (FSeq s) = SSeq $ map (go m) s
-    go m (FLabel (flip M.lookup m -> Just n)) = SLabel n
-    go _ (FPerm' (Perm _ f)) = sigf' f
-    go _ (FRef r') = SRef r'
+    m = bruijns $ l ++ r
+    go (PSeq _ s) = SSeq $ map go s
+    go (PLabel l') = SLabel $ m M.! l'
+    go (PPerm _) = SPerm
+
+slots :: Perm -> [Int]
+slots (Perm _ l r) = concatMap go $ l ++ r
+  where
+    go (PSeq _ s) = concatMap go s
+    go (PLabel _) = []
+    go (PPerm (deref -> p)) = [identify p]
