@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeFamilies #-}
 
-module Core
-( module Core
+module Compilation
+( module Compilation
 ) where
 
 import Numeric.Natural (Natural)
