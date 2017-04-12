@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeFamilies #-}
+
 module Core
 ( module Core
 ) where
@@ -5,8 +7,12 @@ module Core
 import Numeric.Natural (Natural)
 import Numeric (showIntAtBase)
 import Data.Char (ord, intToDigit)
-import qualified Model as M
+import qualified Model as Mo
+import qualified Common as C
+import qualified Data.Map.Lazy as Ma
 import Data.Function (on)
+import Control.Monad (foldM, join, guard)
+import Data.List (nub)
 
 --- parsing intermediate
 
@@ -71,6 +77,44 @@ choice n = Perm [fs"f", l"z", l"g"] [l"f", fs"g", l"z"]
 choices :: [(String, Expr)]
 choices = map (\n -> (shows n ":", choice n)) [0..8]
 
+--- remove top level labels and expand perm labels to avoid
+--- cycles and inconsistencies
+
+flatten :: Expr -> Maybe Expr
+flatten (Seq xs) = Seq <$> mapM flatten xs
+flatten (Perm l' r') = do l'' <- mapM flatten l'
+                          r'' <- mapM flatten r'
+                          m <- foldM build Ma.empty $ l'' ++ r''
+                          guard . C.acyclicp $ depgraph m
+                          return $ flatten' m l'' r''
+flatten (As _ e) = flatten e
+flatten (Ref r') = Just $ Ref r'
+flatten (Label _) = Nothing
+
+build :: (m ~ Ma.Map String Expr) => m -> Expr -> Maybe m
+build m (Seq xs) = foldM build m xs
+build m (As l' e) =
+  case Ma.lookup l' m of
+    Just _ -> Nothing -- duplicate definition
+    Nothing -> build (Ma.insert l' e m) e
+build m _ = Just m
+
+depgraph :: Ma.Map String Expr -> [(String, String, [String])]
+depgraph = map (uncurry $ join (,,)) . Ma.toList . Ma.map (nub . go)
+  where
+    go (Seq xs) = concatMap go xs
+    go (As l' _) = [l']
+    go (Label l') = [l']
+    go _ = []
+
+flatten' :: Ma.Map String Expr -> [Expr] -> [Expr] -> Expr
+flatten' m = Perm `on` map go
+  where
+    go (Seq xs) = Seq $ map go xs
+    go (As l' e) = maybe e go $ Ma.lookup l' m
+    go (Label l') = go $ As l' (Label l')
+    go x = x
+
 --- compilation
 
 {-data Expr = Seq [Expr]
@@ -93,22 +137,28 @@ need:
  - they should also return a list of newly defined local perms
 -}
 
-flatten :: Expr -> Expr
-flatten = undefined
+data CompileException = LabelCycle
+                      | DataCycle
+                      | UndefinedReference
 
-compilex :: Expr -> M.Expr
-compilex (Seq xs) = M.ESeq M.Anon $ map compilex xs
-compilex (Perm l' r') = M.EPerm . M.Local $ compilep l' r'
+compile :: Expr -> Either CompileException Mo.Expr
+compile e = case flatten e of
+              Nothing -> Left LabelCycle
+              Just e' -> Right $ compilex e'
+
+compilex :: Expr -> Mo.Expr
+compilex (Seq xs) = Mo.ESeq Mo.Anon $ map compilex xs
+compilex (Perm l' r') = Mo.EPerm . Mo.Local $ compilep l' r'
 compilex (Ref _) = undefined
 compilex _ = undefined
 
-compilepx :: Expr -> M.PExpr
-compilepx (Seq xs) = M.PSeq M.Anon $ map compilepx xs
-compilepx (As l' (Seq xs)) = M.PSeq (M.ByLabel l') $ map compilepx xs
-compilepx (Perm l' r') = M.PPerm . M.Local $ compilep l' r'
-compilepx (Label l') = M.PLabel l'
+compilepx :: Expr -> Mo.PExpr
+compilepx (Seq xs) = Mo.PSeq Mo.Anon $ map compilepx xs
+compilepx (As l' (Seq xs)) = Mo.PSeq (Mo.ByLabel l') $ map compilepx xs
+compilepx (Perm l' r') = Mo.PPerm . Mo.Local $ compilep l' r'
+compilepx (Label l') = Mo.PLabel l'
 compilepx (Ref _) = undefined
 compilepx _ = undefined
 
-compilep :: [Expr] -> [Expr] -> M.Perm
-compilep = M.Perm (M.PID 0 0) `on` map compilepx
+compilep :: [Expr] -> [Expr] -> Mo.Perm
+compilep = Mo.Perm (Mo.PID 0 0) `on` map compilepx
