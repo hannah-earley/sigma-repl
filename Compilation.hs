@@ -24,7 +24,7 @@ data Expr = Seq [Expr]
           | Label String
           deriving Show
 
---- helper functions
+--- helper functions / preludey stuff
 
 r :: String -> Expr
 r = Ref
@@ -117,6 +117,9 @@ flatten' m = Perm `on` map go
     go x = x
 
 --- compilation
+---  take raw expressions with raw references, unhashed perms and
+---  possible label cycles and resolve all of them, converting to
+---  a Model.Expr in the process
 
 {-data Expr = Seq [Expr]
           | Perm [Expr] [Expr]
@@ -124,19 +127,6 @@ flatten' m = Perm `on` map go
           | Ref String
           | Label String
           deriving Show-}
-
-{-
-need:
- - implementation for flatten, which should check consistency of
-   @s within perms and substitute the finite reductions
- - all these functions should be either'd and return an exception
-   on error
- - the compile functions should take:
-     - an integer for local perm counting
-     - a Map Int Hash for local perm ids
-     - a Scope String M.Expr for derefererencing
- - they should also return a list of newly defined local perms
--}
 
 data CompileException = LabelCycle
                       | DataCycle
