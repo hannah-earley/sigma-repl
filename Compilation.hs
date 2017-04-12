@@ -8,6 +8,7 @@ import Numeric.Natural (Natural)
 import Numeric (showIntAtBase)
 import Data.Char (ord, intToDigit)
 import qualified Model as Mo
+import qualified Scope as S
 import qualified Common as C
 import qualified Data.Map.Lazy as Ma
 import Data.Function (on)
@@ -141,18 +142,24 @@ data CompileException = LabelCycle
                       | DataCycle
                       | UndefinedReference
 
+type CompContext = (Int, Ma.Map Int Mo.Hash, S.Scope Mo.ID Mo.Expr)
+type Compiled a = Either CompileException (Int, a, [Mo.Perm])
+
 compile :: Expr -> Either CompileException Mo.Expr
+--compile :: CompContext -> Expr -> Compiled Mo.Expr
 compile e = case flatten e of
               Nothing -> Left LabelCycle
               Just e' -> Right $ compilex e'
 
 compilex :: Expr -> Mo.Expr
+--compilex :: CompContext -> Expr -> Compiled Mo.Expr
 compilex (Seq xs) = Mo.ESeq Mo.Anon $ map compilex xs
 compilex (Perm l' r') = Mo.EPerm . Mo.Local $ compilep l' r'
 compilex (Ref _) = undefined
 compilex _ = undefined
 
 compilepx :: Expr -> Mo.PExpr
+--compilepx :: CompContext -> Expr -> Compiled Mo.PExpr
 compilepx (Seq xs) = Mo.PSeq Mo.Anon $ map compilepx xs
 compilepx (As l' (Seq xs)) = Mo.PSeq (Mo.ByLabel l') $ map compilepx xs
 compilepx (Perm l' r') = Mo.PPerm . Mo.Local $ compilep l' r'
@@ -161,4 +168,5 @@ compilepx (Ref _) = undefined
 compilepx _ = undefined
 
 compilep :: [Expr] -> [Expr] -> Mo.Perm
+--compilep :: CompContext -> [Expr] -> [Expr] -> Compiled Mo.Perm
 compilep = Mo.Perm (Mo.PID 0 0) `on` map compilepx
