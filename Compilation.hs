@@ -1,4 +1,5 @@
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TupleSections #-}
 
 module Compilation
 ( module Compilation
@@ -130,33 +131,58 @@ flatten' m = Perm `on` map go
 
 data CompileException = LabelCycle
                       | DataCycle
-                      | UndefinedReference
+                      | UndefinedReference String
 
-type CompContext = (Int, Ma.Map Int Mo.Hash, S.Scope Mo.ID Mo.Expr)
+type CompContext = (Int, Ma.Map Int Mo.Hash, S.Scope Mo.ID Mo.Expr, S.Scope Mo.ID Mo.Perm)
 type Compiled a = Either CompileException (Int, a, [Mo.Perm])
 
-compile :: Expr -> Either CompileException Mo.Expr
---compile :: CompContext -> Expr -> Compiled Mo.Expr
-compile e = case flatten e of
-              Nothing -> Left LabelCycle
-              Just e' -> Right $ compilex e'
+compile :: CompContext -> Expr -> Compiled Mo.Expr
+compile c e = case flatten e of
+                Nothing -> Left LabelCycle
+                Just e' -> compExpr c e'
 
-compilex :: Expr -> Mo.Expr
---compilex :: CompContext -> Expr -> Compiled Mo.Expr
-compilex (Seq xs) = Mo.ESeq Mo.Anon $ map compilex xs
-compilex (Perm l' r') = Mo.EPerm . Mo.Local $ compilep l' r'
-compilex (Ref _) = undefined
-compilex _ = undefined
+-- should make a CompiledM monad...
+compSeq :: CompContext -> (CompContext -> Expr -> Compiled a)
+                       -> [Expr] -> Compiled [a]
+compSeq (n,_,_,_) _ [] = Right (n, [], [])
+compSeq c@(_,h,s,t) f (x:xs) =
+  case f c x of
+    Left e -> Left e
+    Right (n, x', ps) ->
+      case compSeq (n,h,s,t) f xs of
+        Left e' -> Left e'
+        Right (n', x's, ps') -> Right (n', x':x's, ps++ps')
 
-compilepx :: Expr -> Mo.PExpr
---compilepx :: CompContext -> Expr -> Compiled Mo.PExpr
-compilepx (Seq xs) = Mo.PSeq Mo.Anon $ map compilepx xs
-compilepx (As l' (Seq xs)) = Mo.PSeq (Mo.ByLabel l') $ map compilepx xs
-compilepx (Perm l' r') = Mo.PPerm . Mo.Local $ compilep l' r'
-compilepx (Label l') = Mo.PLabel l'
-compilepx (Ref _) = undefined
-compilepx _ = undefined
+compExpr :: CompContext -> Expr -> Compiled Mo.Expr
+compExpr c (Seq xs) = case compSeq c compExpr xs of
+                        Left e -> Left e
+                        Right (n,xs',ps) -> Right (n,Mo.ESeq Mo.Anon xs',ps)
+compExpr c (Perm l' r') = case compPerm c l' r' of
+                            Left e -> Left e
+                            Right (n,p,ps) -> Right (n,Mo.EPerm $ Mo.Local p,p:ps)
+compExpr (n,_,s,t) (Ref r') =
+  case S.resolve s r' of
+    Nothing -> Left $ UndefinedReference r'
+    Just c ->
+      case S.def c of
+        Mo.ESeq _ xs -> Right . (n,,[]) $ Mo.ESeq (Mo.ByRef r') xs
+        _ -> case S.resolve t r' of
+          Nothing -> Left $ UndefinedReference r'
+          Just p -> Right . (n,,[]) . Mo.EPerm $ Mo.Remote p
+compExpr _ _ = undefined
+  -- as and labels should have been purged by flatten
 
-compilep :: [Expr] -> [Expr] -> Mo.Perm
---compilep :: CompContext -> [Expr] -> [Expr] -> Compiled Mo.Perm
-compilep = Mo.Perm (Mo.PID 0 0) `on` map compilepx
+compPExpr :: CompContext -> Expr -> Compiled Mo.PExpr
+compPExpr = undefined
+-- compilepx :: Expr -> Mo.PExpr
+-- compilepx (Seq xs) = Mo.PSeq Mo.Anon $ map compilepx xs
+-- compilepx (As l' (Seq xs)) = Mo.PSeq (Mo.ByLabel l') $ map compilepx xs
+-- compilepx (Perm l' r') = Mo.PPerm . Mo.Local $ compilep l' r'
+-- compilepx (Label l') = Mo.PLabel l'
+-- compilepx (Ref _) = undefined
+-- compilepx _ = undefined
+
+compPerm :: CompContext -> [Expr] -> [Expr] -> Compiled Mo.Perm
+compPerm = undefined
+-- compilep :: [Expr] -> [Expr] -> Mo.Perm
+-- compilep = Mo.Perm (Mo.PID 0 0) `on` map compilepx
