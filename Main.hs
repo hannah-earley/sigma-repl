@@ -1,10 +1,10 @@
 module Main where
 
+import Control.Monad (foldM)
 import System.Environment (getArgs)
 import System.Console.Haskeline
   ( defaultSettings, withInterrupt, getInputLine
   , outputStrLn, InputT, runInputT, handleInterrupt )
-import Control.Monad (foldM)
 
 main :: IO ()
 main = getArgs >>= foldM load emptyContext
