@@ -1,6 +1,6 @@
 {-# LANGUAGE TupleSections #-}
 
-module Input
+module Parser
 ( Term(..)
 , SigmaToken(..)
 , ParseResult(..)
@@ -71,7 +71,7 @@ data ParseResult a = ParseOK a
 
 -- SysUnExpect "" corresponds to an unexpected eof, which is useful
 -- for multiline repl inputs, otherwise we just extract the parsec error
--- as a string if it exists else return the result 
+-- as a string if it exists else return the result
 parseResult :: Either P.ParseError a -> ParseResult a
 parseResult (Right r) = ParseOK r
 parseResult (Left e)
