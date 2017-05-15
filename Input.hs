@@ -6,13 +6,13 @@ module Input
 
 --- imports
 
-import Control.Monad (liftM2, unless)
+import Control.Monad (liftM2, unless, guard)
 import qualified Control.Exception as E
 
 import Text.Parsec (parse)
 import qualified Parser as P
 
--- import Numeric (showHex)
+import Numeric (showHex)
 import Data.List (intercalate)
 import Data.Typeable (Typeable)
 import Data.Hashable (hash)
@@ -22,10 +22,10 @@ import Data.Time.Clock.POSIX (POSIXTime)
 import qualified System.Posix.Files as F
 import System.Posix.Types (DeviceID, FileID)
 import System.Posix.IO (handleToFd)
--- import System.Directory (makeAbsolute, withCurrentDirectory)
--- import System.FilePath.Posix (makeRelative, splitFileName, (<.>))
+import System.Directory (makeAbsolute, withCurrentDirectory)
+import System.FilePath.Posix (makeRelative, splitFileName, (<.>))
 import System.IO (openFile, IOMode(ReadMode), hGetContents, Handle)
--- import System.IO.Error (isDoesNotExistError)
+import System.IO.Error (isDoesNotExistError)
 
 --- file handling
 
@@ -49,7 +49,7 @@ data Edge = Edge { label :: Label
                  , to :: Int }
 
 data Graph = Graph { nodes :: M.Map Int (Node, [Edge])
-                   , resources :: M.Map ResourceID Int
+                   , resources :: M.Map ResourceID (Int, FilePath)
                    , asof :: POSIXTime
                    , base :: FilePath }
 
@@ -59,7 +59,7 @@ data ReadError = LocateError FilePath
                | ParseError String
                | IncompleteError String
                | ImportError FilePath [ID]
-               | InconsistencyError
+               | InconsistencyError FilePath
                deriving (Show, Typeable)
 
 instance E.Exception ReadError where
@@ -68,7 +68,8 @@ instance E.Exception ReadError where
   displayException (IncompleteError e) = e
   displayException (ImportError p xs) =
     "Couldn't import " ++ intercalate ", " xs ++ " from " ++ p
-  displayException InconsistencyError = "File changed whilst loading"
+  displayException (InconsistencyError p) =
+    "File " ++ p ++ " changed whilst loading"
 
 --- graph manipulation
 
@@ -99,7 +100,7 @@ addEdges g f = foldr (\e g' -> addEdge g' f e) g
 data ResourceID = File DeviceID FileID POSIXTime
                 | Raw Int deriving (Eq, Ord)
 
-data Resource = Resource ResourceID String
+data Resource = Resource FilePath ResourceID String
 
 resourceID :: Handle -> IO ResourceID
 resourceID h = fmap go $ handleToFd h >>= F.getFdStatus
@@ -110,10 +111,28 @@ resourceID h = fmap go $ handleToFd h >>= F.getFdStatus
 
 fileResource :: FilePath -> IO Resource
 fileResource f = do fp <- openFile f ReadMode
-                    liftM2 Resource (resourceID fp) (hGetContents fp)
+                    liftM2 (Resource f) (resourceID fp) (hGetContents fp)
+
+tryResources :: FilePath -> [FilePath] -> IO Resource
+tryResources f [] = E.throwIO $ LocateError f
+tryResources f (g:gs) = E.catchJust (guard . isDoesNotExistError)
+                                    (fileResource g)
+                                    (const $ tryResources f gs)
+
+resolvePath :: FilePath -> FilePath -> IO FilePath
+resolvePath based f = makeRelative based <$> makeAbsolute f
+
+locateResource :: FilePath -> FilePath -> IO Resource
+locateResource based f =
+  do f0 <- resolvePath based f
+     Resource f' r c <- tryResources f0 [f, f <.> "sig"]
+     f'' <- resolvePath based f'
+     return $ Resource f'' r c
 
 rawResource :: String -> Resource
-rawResource s = Resource (Raw $ hash s) s
+rawResource s = let h = hash s
+                    f = take 12 $ showHex h "input-"
+                in Resource f (Raw h) s
 
 --- resource graphing
 
@@ -122,15 +141,15 @@ checkResource _ (Raw _) = True
 checkResource g (File _ _ t) = t <= asof g
 
 fetchResource :: Graph -> Resource -> IO (Graph, Int)
-fetchResource g r@(Resource ri _) =
-  do unless (checkResource g ri) $ E.throwIO InconsistencyError
+fetchResource g r@(Resource f ri _) =
+  do unless (checkResource g ri) . E.throwIO $ InconsistencyError f
      case M.lookup ri (resources g) of
        Nothing -> insertResource g r
-       Just n -> return (g, n)
+       Just (n,_) -> return (g, n)
 
 insertResource :: Graph -> Resource -> IO (Graph, Int)
-insertResource g (Resource r c) =
-  let (g',m,n) = addPlaceholder g r
+insertResource g (Resource f r c) =
+  let (g',m,n) = addPlaceholder g r f
   in case P.parseResult $ parse P.terms "<file>" c of
        P.ParseOK ts -> (,m) <$> applyTerms (g',m,n) ts
        P.ParseError e -> E.throwIO $ ParseError e
@@ -139,12 +158,12 @@ insertResource g (Resource r c) =
            Raw _ -> E.throwIO $ IncompleteError e
            _ -> E.throwIO $ ParseError e
 
-addPlaceholder :: Graph -> ResourceID -> (Graph, Int, Int)
-addPlaceholder g0 r =
+addPlaceholder :: Graph -> ResourceID -> FilePath -> (Graph, Int, Int)
+addPlaceholder g0 r f =
   let (g1,m) = insertNode g0 Group
       (g2,n) = insertNode g1 Group
       g3 = addEdge g2 n (Edge (Qualified "") Up m)
-      g4 = g3 {resources = M.insert r m $ resources g3}
+      g4 = g3 {resources = M.insert r (m,f) $ resources g3}
   in (g4,m,n)
 
 --- term graphing
