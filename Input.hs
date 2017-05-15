@@ -33,9 +33,13 @@ import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import qualified System.Posix.Files as F
 import System.Posix.Types (DeviceID, FileID, Fd)
 import System.Posix.IO (handleToFd, fdToHandle)
-import System.Directory ( makeAbsolute, withCurrentDirectory
+import System.Directory ( canonicalizePath
+                        , withCurrentDirectory
                         , getCurrentDirectory )
-import System.FilePath.Posix (makeRelative, splitFileName, (<.>))
+import System.FilePath.Posix ( splitFileName
+                             , splitPath
+                             , joinPath
+                             , (<.>))
 import System.IO (openFile, IOMode(ReadMode), hGetContents)
 import System.IO.Error (isDoesNotExistError)
 
@@ -148,8 +152,25 @@ tryResources f (g:gs) = E.catchJust (guard . isDoesNotExistError)
                                     (fileResource g)
                                     (const $ tryResources f gs)
 
+-- takes two split **canonical** paths, eliminates their common
+-- prefix and finds the way from the first to the second via ..
+-- N.B. this requires canonical paths such that symlinks have
+-- been eliminated, as otherwise the new path may not be strictly
+-- equivalent (which is why System.FilePath.Posix.makeRelative
+-- does not do the below behaviour)
+makeCanRelative :: [FilePath] -> [FilePath] -> [FilePath]
+makeCanRelative [] [] = []
+makeCanRelative xs [] = map (const "../") xs
+makeCanRelative [] ys = ys
+makeCanRelative (x:xs) (y:ys)
+  | x == y = makeCanRelative xs ys
+  | otherwise = "../" : makeCanRelative xs (y:ys)
+
 resolvePath :: FilePath -> FilePath -> IO FilePath
-resolvePath based f = makeRelative based <$> makeAbsolute f
+resolvePath based f =
+  do bc <- splitPath <$> canonicalizePath based
+     fc <- splitPath <$> canonicalizePath f
+     return . joinPath $ makeCanRelative bc fc
 
 locateResource :: FilePath -> FilePath -> IO (FilePath, Resource)
 locateResource based f =
@@ -161,8 +182,8 @@ locateResource based f =
 
 rawResource :: String -> Resource
 rawResource s = let h = hash s
-                    f = take 12 $ showHex h "input-"
-                in Resource f (Raw h) s
+                    hx = take 6 $ showHex h ""
+                in Resource ("input-" ++ hx) (Raw h) s
 
 --- resource graphing
 
