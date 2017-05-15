@@ -223,31 +223,40 @@ getInheritance :: Graph -> FilePath -> IO (Graph, Int)
 getInheritance g fp = do (d,r) <- locateResource (base g) fp
                          withCurrentDirectory d $ fetchResource g r
 
---- term graphing
+--- [term] graphing
 
 applyTerms :: (Graph,Int,Int) -> [P.Term] -> IO Graph
 applyTerms (g,m,n) = foldM (applyTerm . (,m,n)) g
 
+--- term graphing
+
 applyTerm :: (Graph,Int,Int) -> P.Term -> IO Graph
+
 applyTerm (g,_,n) (P.InheritAll fp pre) =
   do (g',l) <- getInheritance g fp
      return $ addEdge g' n $ Edge (Qualified pre) Down l
+
 applyTerm (g,_,n) (P.InheritSome fp xs) =
   do (g',l) <- getInheritance g fp
      let xs' = map (\(x,y) -> Edge (Single x y) Down l) xs
      return $ addEdges g' n xs'
+
 applyTerm (g,m,n) P.BequeathAll =
   return $ addEdge g m (Edge (Qualified "") Down n)
+
 applyTerm (g,m,n) (P.BequeathSome xs) =
   return $ addEdges g m $ map (\(x,y) -> Edge (Single y x) Down n) xs
+
 applyTerm (g,_,n) (P.Group ts) =
   let (g',n') = insertNode g Group
       g'' = addEdge g' n' (Edge (Qualified "") Up n)
   in applyTerms (g'',n,n') ts
+
 applyTerm (g,_,n) (P.LocalDef x z) =
   let (g',n') = insertNode g (Def x z)
       g'' = addEdge g' n (Edge (Single x x) Down n')
   in return $ addEdge g'' n' (Edge (Qualified "") Up n)
+
 applyTerm (g,m,n) (P.BequeathDef (x,y) z) =
   do g' <- applyTerm (g,m,n) (P.LocalDef x z)
      return $ addEdge g' m (Edge (Single y x) Down n)
