@@ -6,6 +6,7 @@ module Parser
 , SigmaRef'(..)
 , ParseResult(..)
 , term
+, terms
 , stok
 , parseResult
 ) where
@@ -83,6 +84,9 @@ data Term = InheritAll FilePath String
           | LocalDef String SigmaToken
           | BequeathDef (String,String) SigmaToken
           deriving (Show)
+
+terms :: Parser [Term]
+terms = P.manyTill term P.eof
 
 term :: Parser Term
 term = P.labels (parens ttok) labels
