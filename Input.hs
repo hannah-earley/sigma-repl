@@ -122,12 +122,13 @@ tryResources f (g:gs) = E.catchJust (guard . isDoesNotExistError)
 resolvePath :: FilePath -> FilePath -> IO FilePath
 resolvePath based f = makeRelative based <$> makeAbsolute f
 
-locateResource :: FilePath -> FilePath -> IO Resource
+locateResource :: FilePath -> FilePath -> IO (FilePath, Resource)
 locateResource based f =
   do f0 <- resolvePath based f
      Resource f' r c <- tryResources f0 [f, f <.> "sig"]
      f'' <- resolvePath based f'
-     return $ Resource f'' r c
+     let (d,_) = splitFileName f'
+     return (d, Resource f'' r c)
 
 rawResource :: String -> Resource
 rawResource s = let h = hash s
@@ -166,6 +167,12 @@ addPlaceholder g0 r f =
       g4 = g3 {resources = M.insert r (m,f) $ resources g3}
   in (g4,m,n)
 
+-- properly handle changing directory for relative imports, including
+-- if we choose to allow for library search paths in the future
+getInheritance :: Graph -> FilePath -> IO (Graph, Int)
+getInheritance g fp = do (d,r) <- locateResource (base g) fp
+                         withCurrentDirectory d $ fetchResource g r
+
 --- term graphing
 
 applyTerms :: (Graph,Int,Int) -> [P.Term] -> IO Graph
@@ -174,10 +181,10 @@ applyTerms g@(_,m,n) (t:ts) = (,m,n) <$> applyTerm g t
 
 applyTerm :: (Graph,Int,Int) -> P.Term -> IO Graph
 applyTerm (g,_,n) (P.InheritAll fp pre) =
-  do (g',l) <- fileResource fp >>= fetchResource g
+  do (g',l) <- getInheritance g fp
      return $ addEdge g' n $ Edge (Qualified pre) Down l
 applyTerm (g,_,n) (P.InheritSome fp xs) =
-  do (g',l) <- fileResource fp >>= fetchResource g
+  do (g',l) <- getInheritance g fp
      let xs' = map (\(x,y) -> Edge (Single x y) Down l) xs
      return $ addEdges g' n xs'
 applyTerm (g,m,n) P.BequeathAll =
@@ -195,45 +202,3 @@ applyTerm (g,_,n) (P.LocalDef x z) =
 applyTerm (g,m,n) (P.BequeathDef (x,y) z) =
   do g' <- applyTerm (g,m,n) (P.LocalDef x z)
      return $ addEdge g' m (Edge (Single y x) Down n)
-
----
-
---- reading
---
--- uniqueContents :: FilePath -> IO (UniqueAccessID, String)
--- uniqueContents f = do fp <- openFile f ReadMode
---                       fs <- handleToFd fp >>= F.getFdStatus
---                       c <- hGetContents fp
---                       return (uniqueAccessID fs, c)
---
--- type FileContext a = (String, UniqueAccessID, a)
---
--- loadFile :: FilePath -> FilePath -> IO (FileContext P.Term)
--- loadFile base f =
---   do (uai, c) <- uniqueContents f
---      f' <- makeRelative base <$> makeAbsolute f
---      case P.parseResult $ parse P.term f' c of
---        P.ParseOK t -> return (f', uai, t)
---        P.ParseError e -> E.throwIO $ ParseError e
---        P.ParseIncomplete e -> E.throwIO $ ParseError e
---
--- loadString :: String -> IO (FileContext P.Term)
--- loadString s =
---   let n = hash s
---       f = take 6 $ showHex n "input-"
---   in case P.parseResult $ parse P.term f s of
---     P.ParseOK t -> return (f, CLInput n, t)
---     P.ParseError e -> E.throwIO $ ParseError e
---     P.ParseIncomplete e -> E.throwIO $ IncompleteError e
---
--- trypaths :: FilePath -> FilePath -> [FilePath] -> IO (FileContext P.Term)
--- trypaths _ f [] = E.throwIO $ LocateError f
--- trypaths base f (g:gs) =
---   E.catchJust (guard . isDoesNotExistError)
---               (loadFile base g)
---               (const $ trypaths base f gs)
---
--- fetch :: FilePath -> FilePath -> IO (FileContext P.Term)
--- fetch base p = let (d,f) = splitFileName p
---                    r = trypaths base f [f, f <.> "sig"]
---                in withCurrentDirectory d r
