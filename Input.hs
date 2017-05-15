@@ -1,12 +1,23 @@
 {-# LANGUAGE TupleSections #-}
 
 module Input
-( module Input
+( ID
+, Node(..)
+, Label(..)
+, Precedence(..)
+, Edge(..)
+, Graph(..)
+, empty
+, loadRaw
+, loadFile
+, loadFiles
+, edgesFrom
+, edgesBy
 ) where
 
 --- imports
 
-import Control.Monad (liftM2, unless, guard)
+import Control.Monad (unless, guard, foldM, ap)
 import qualified Control.Exception as E
 
 import Text.Parsec (parse)
@@ -18,40 +29,56 @@ import Data.Typeable (Typeable)
 import Data.Hashable (hash)
 import qualified Data.Map as M
 
-import Data.Time.Clock.POSIX (POSIXTime)
+import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import qualified System.Posix.Files as F
-import System.Posix.Types (DeviceID, FileID)
-import System.Posix.IO (handleToFd)
-import System.Directory (makeAbsolute, withCurrentDirectory)
+import System.Posix.Types (DeviceID, FileID, Fd)
+import System.Posix.IO (handleToFd, fdToHandle)
+import System.Directory ( makeAbsolute, withCurrentDirectory
+                        , getCurrentDirectory )
 import System.FilePath.Posix (makeRelative, splitFileName, (<.>))
-import System.IO (openFile, IOMode(ReadMode), hGetContents, Handle)
+import System.IO (openFile, IOMode(ReadMode), hGetContents)
 import System.IO.Error (isDoesNotExistError)
-
---- file handling
-
-data UniqueFileID = UniqueFileID DeviceID FileID
-uniqueFileID :: F.FileStatus -> UniqueFileID
-uniqueFileID = liftM2 UniqueFileID F.deviceID F.fileID
-
-data UniqueAccessID = UniqueAccessID UniqueFileID POSIXTime | CLInput Int
-uniqueAccessID :: F.FileStatus -> UniqueAccessID
-uniqueAccessID = liftM2 UniqueAccessID uniqueFileID F.modificationTimeHiRes
 
 --- scope representation
 
 type ID = String
-data Node = Def ID P.SigmaToken | Group
-data Label = Qualified ID | Single ID ID
-data Precedence = Down | Up | Shadow deriving (Eq)
+data Node = Def ID P.SigmaToken | Group deriving (Show)
+data Label = Qualified ID | Single ID ID deriving (Show)
+data Precedence = Down | Up | Shadow deriving (Eq, Show)
 
 data Edge = Edge { label :: Label
                  , precedence :: Precedence
-                 , to :: Int }
+                 , to :: Int } deriving (Show)
 
 data Graph = Graph { nodes :: M.Map Int (Node, [Edge])
                    , resources :: M.Map ResourceID (Int, FilePath)
                    , asof :: POSIXTime
-                   , base :: FilePath }
+                   , base :: FilePath
+                   , root :: Int } deriving (Show)
+
+empty :: IO Graph
+empty = do cwd <- getCurrentDirectory
+           now <- getPOSIXTime
+           return Graph { nodes = M.singleton 0 (Group, [])
+                        , resources = M.empty
+                        , asof = now
+                        , base = cwd
+                        , root = 0 }
+
+doLoad :: Graph -> (Graph -> a -> IO (Graph, Int)) -> a -> IO Graph
+doLoad g f x = do now <- getPOSIXTime
+                  (g',n') <- f (g {asof = now}) x
+                  let (g'',n'') = stack g' n' (root g)
+                  return g'' {root = n''}
+
+loadRaw :: Graph -> String -> IO Graph
+loadRaw g = doLoad g fetchResource . rawResource
+
+loadFile :: Graph -> FilePath -> IO Graph
+loadFile g = doLoad g getInheritance
+
+loadFiles :: Graph -> [FilePath] -> IO Graph
+loadFiles = foldM loadFile
 
 --- errors
 
@@ -86,8 +113,8 @@ stack g prefer backup =
                           , Edge (Qualified "") Shadow backup ]
 
 insertNode :: Graph -> Node -> (Graph, Int)
-insertNode g x = let n = maximum . M.keys $ nodes g
-               in (g {nodes = M.insert n (x,[]) $ nodes g}, n)
+insertNode g x = let n = (+1) . maximum . M.keys $ nodes g
+                 in (g {nodes = M.insert n (x,[]) $ nodes g}, n)
 
 addEdge :: Graph -> Int -> Edge -> Graph
 addEdge g f e = g {nodes = M.adjust (fmap (e:)) f $ nodes g}
@@ -98,20 +125,22 @@ addEdges g f = foldr (\e g' -> addEdge g' f e) g
 --- resources
 
 data ResourceID = File DeviceID FileID POSIXTime
-                | Raw Int deriving (Eq, Ord)
+                | Raw Int deriving (Eq, Ord, Show)
 
 data Resource = Resource FilePath ResourceID String
+              deriving (Show)
 
-resourceID :: Handle -> IO ResourceID
-resourceID h = fmap go $ handleToFd h >>= F.getFdStatus
+resourceID :: Fd -> IO ResourceID
+resourceID fd = go <$> F.getFdStatus fd
   where go s = let d = F.deviceID s
                    f = F.fileID s
                    t = F.modificationTimeHiRes s
                in File d f t
 
 fileResource :: FilePath -> IO Resource
-fileResource f = do fp <- openFile f ReadMode
-                    liftM2 (Resource f) (resourceID fp) (hGetContents fp)
+fileResource f = do fd <- openFile f ReadMode >>= handleToFd
+                    ap (Resource f <$> resourceID fd)
+                       (fdToHandle fd >>= hGetContents)
 
 tryResources :: FilePath -> [FilePath] -> IO Resource
 tryResources f [] = E.throwIO $ LocateError f
@@ -151,7 +180,7 @@ fetchResource g r@(Resource f ri _) =
 insertResource :: Graph -> Resource -> IO (Graph, Int)
 insertResource g (Resource f r c) =
   let (g',m,n) = addPlaceholder g r f
-  in case P.parseResult $ parse P.terms "<file>" c of
+  in case P.parseResult $ parse P.terms f c of
        P.ParseOK ts -> (,m) <$> applyTerms (g',m,n) ts
        P.ParseError e -> E.throwIO $ ParseError e
        P.ParseIncomplete e ->
@@ -176,8 +205,7 @@ getInheritance g fp = do (d,r) <- locateResource (base g) fp
 --- term graphing
 
 applyTerms :: (Graph,Int,Int) -> [P.Term] -> IO Graph
-applyTerms g@(_,m,n) (t:ts) = (,m,n) <$> applyTerm g t
-                                     >>= flip applyTerms ts
+applyTerms (g,m,n) = foldM (applyTerm . (,m,n)) g
 
 applyTerm :: (Graph,Int,Int) -> P.Term -> IO Graph
 applyTerm (g,_,n) (P.InheritAll fp pre) =
