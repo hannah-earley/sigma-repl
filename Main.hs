@@ -1,5 +1,9 @@
 module Main where
 
+import Input ()
+import Parser ()
+import Overture ()
+
 import Control.Monad (foldM)
 import System.Environment (getArgs)
 import System.Console.Haskeline

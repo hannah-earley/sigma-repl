@@ -58,6 +58,7 @@ data Graph = Graph { nodes :: M.Map Int (Node, [Edge])
                    , resources :: M.Map ResourceID (Int, FilePath)
                    , asof :: POSIXTime
                    , base :: FilePath
+                   , overture :: Int
                    , root :: Int } deriving (Show)
 
 empty :: IO Graph
@@ -67,6 +68,7 @@ empty = do cwd <- getCurrentDirectory
                         , resources = M.empty
                         , asof = now
                         , base = cwd
+                        , overture = 0
                         , root = 0 }
 
 doLoad :: Graph -> (Graph -> a -> IO (Graph, Int)) -> a -> IO Graph
@@ -182,7 +184,7 @@ locateResource based f =
 
 rawResource :: String -> Resource
 rawResource s = let h = hash s
-                    hx = take 6 $ showHex h ""
+                    hx = take 6 $ showHex (abs h) ""
                 in Resource ("input-" ++ hx) (Raw h) s
 
 --- resource graphing
