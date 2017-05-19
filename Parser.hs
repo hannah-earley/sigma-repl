@@ -3,7 +3,6 @@
 module Parser
 ( Term(..)
 , SigmaToken(..)
-, SigmaRef'(..)
 , ParseResult(..)
 , term
 , terms
@@ -110,24 +109,27 @@ term = P.labels (parens ttok) labels
 
     tperml = do reserved "perm"
                 (n,l) <- parens $ plhs identifier
-                (r,n') <- parens prhs
+                (r,n') <- parens $ prhs identifier
                 pval (n,n) n'
-                return . LocalDef n $ SigmaPerm l r
+                return . LocalDef n $ mkperm n l r
 
     tpermb = do reserved "perm*"
                 (n,l) <- parens $ plhs defid
-                (r,n') <- parens prhs
+                (r,n') <- parens $ prhs identifier
                 pval n n'
-                return . BequeathDef n $ SigmaPerm l r
+                return . BequeathDef n $ mkperm (fst n) l r
 
 --- sigma expressions
 
 data SigmaToken = SigmaSeq [SigmaToken]
                 | SigmaLabel String
                 | SigmaRef String
-                | SigmaRef' SigmaRef'
+                | SigmaRef' String
                 | SigmaPerm [SigmaToken] [SigmaToken]
                 deriving (Show)
+
+mkperm :: String -> [SigmaToken] -> [SigmaToken] -> SigmaToken
+mkperm n l r = SigmaPerm ([SigmaLabel n] ++ l) (r ++ [SigmaLabel n])
 
 stok :: Parser SigmaToken
 stok = sseq <|> slab <|> sref <|> sperm <|> ssugar
@@ -135,17 +137,15 @@ stok = sseq <|> slab <|> sref <|> sperm <|> ssugar
     sseq = SigmaSeq <$> parens (P.many stok) <?> "sequence"
     slab = SigmaLabel <$> identifier <?> "label"
     sref = C.char '`' >> SigmaRef <$> identifier <?> "reference"
-    sperm = snd <$> angles perm <?> "permutation"
+    sperm = angles perm <?> "permutation"
 
     perm = do (n,l) <- plhs identifier
               colon
-              (r,n') <- prhs
+              (r,n') <- prhs identifier
               pval (n,n) n'
-              return (n, SigmaPerm l r)
+              return $ mkperm n l r
 
 --- sigma sugar
-
-data SigmaRef' = SCons | SNil | SSucc | SZero deriving (Show)
 
 ssugar :: Parser SigmaToken
 ssugar = sstop <|> sdata <|> snat <|> slist
@@ -159,13 +159,13 @@ ssugar = sstop <|> sdata <|> snat <|> slist
 
     snat = wnat <$> litNat <?> "natural number"
       where
-        wnat 0 = wrap [SigmaRef' SZero, stop]
-        wnat n = wrap [SigmaRef' SSucc, wnat (n-1)]
+        wnat 0 = wrap [SigmaRef' "zero", stop]
+        wnat n = wrap [SigmaRef' "succ", wnat (n-1)]
 
     slist = brackets (P.optionMaybe stok >>= slist') <?> "list"
       where
-        co x z = wrap [SigmaRef' SCons, wrap [x,z]]
-        ni = wrap [SigmaRef' SNil, stop]
+        co x z = wrap [SigmaRef' "cons", wrap [x,z]]
+        ni = wrap [SigmaRef' "nil", stop]
         slist' Nothing = return ni
         slist' (Just x) = flip (foldr co) . (x:) <$> P.many stok
                             >>= (<$> P.option ni (dot >> stok))
@@ -186,8 +186,8 @@ defid = do a <- identifier
 plhs :: Parser n -> Parser (n,[SigmaToken])
 plhs p = (,) <$> p >>= (<$> P.many stok)
 
-prhs :: Parser ([SigmaToken],String)
-prhs = manybut stok identifier
+prhs :: Parser n -> Parser ([SigmaToken],n)
+prhs p = manybut stok p
 
 pval :: (String,String) -> String -> Parser ()
 pval (a,b) c
