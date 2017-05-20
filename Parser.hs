@@ -55,6 +55,7 @@ angles = T.angles lexer         -- Parser a -> Parser a
 brackets = T.brackets lexer     -- Parser a -> Parser a
 colon = T.colon lexer           -- Parser String
 dot = T.dot lexer               -- Parser String
+ws = T.whiteSpace lexer         -- Parser ()
 
 --- result interpretation
 
@@ -85,7 +86,7 @@ data Term = InheritAll FilePath String
           deriving (Show)
 
 terms :: Parser [Term]
-terms = P.manyTill term P.eof
+terms = ws >> P.manyTill term P.eof
 
 term :: Parser Term
 term = P.labels (parens ttok) labels
