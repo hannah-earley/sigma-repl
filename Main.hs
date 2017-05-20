@@ -3,6 +3,7 @@ module Main where
 import Input ()
 import Parser ()
 import Overture ()
+import Algorithm ()
 
 import Control.Monad (foldM)
 import System.Environment (getArgs)
