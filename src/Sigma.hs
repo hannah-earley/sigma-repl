@@ -19,34 +19,46 @@ import Data.Function (on)
 
 --- definitions
 
-data Ref = Anonymous | ByName ID
+data Ref = Anonymous | ByName ID deriving (Show)
 
 data Sigma = SigmaSeq [Sigma]
            | SigmaTok ID Int
            | SigmaPerm Ref Int
+           deriving (Show)
 
 data Permite = PermSeq [Permite]
              | PermLabel ID
              | PermPerm Ref Int
+             deriving (Show)
 
-data Perm = Perm [Permite] [Permite]
+data Perm = Perm [Permite] [Permite] deriving (Show)
 
 data Context = Context { it :: Sigma
                        , tokens :: M.Map Int Sigma
                        , perms :: M.Map Int Perm
                        , eqcls :: M.Map Int Int
-                       , overture :: G.Graph }
-
--- empty = Context M.empty M.empty M.empty M.empty
+                       , overture :: G.Graph } deriving (Show)
 
 ---
 
 type Xified a = StateT (G.Graph, [Int], M.Map Int Perm) IO a
 
+withRoot :: Int -> Xified a -> Xified a
+withRoot n f =
+  do { og <- getGraph ; modifyGraph $ flip G.reroot n
+     ; x <- f ; putGraph og ; return x }
+
 withOverture :: Xified a -> Xified a
-withOverture f =
-  do { (g, ns, m) <- get ; put (G.overroot g, ns, m) ; x <- f
-     ; (_, ns', m') <- get ; put (g, ns', m') ; return x }
+withOverture f = G.overture <$> getGraph >>= flip withRoot f
+
+getGraph :: Xified G.Graph
+getGraph = do { (g, _, _) <- get ; return g }
+
+putGraph :: G.Graph -> Xified ()
+putGraph = modifyGraph . const
+
+modifyGraph :: (G.Graph -> G.Graph) -> Xified ()
+modifyGraph f = modify $ \(g, ns, m) -> (f g, ns, m)
 
 insertAnon :: Perm -> Xified Int
 insertAnon p = do (g, n:ns, m) <- get
@@ -59,7 +71,7 @@ permitify (P.SigmaSeq xs) = PermSeq <$> mapM permitify xs
 permitify (P.SigmaLabel l) = return $ PermLabel l
 permitify (P.SigmaRef' r) = withOverture . permitify $ P.SigmaRef r
 permitify (P.SigmaRef r) =
-  do (g, _, _) <- get
+  do g <- getGraph
      case G.search g r of
        [] -> liftIO . throwIO $ ReferenceError r
        (n, P.SigmaPerm _ _) : _ -> return $ PermPerm (ByName r) n
@@ -79,7 +91,7 @@ sigmify (P.SigmaSeq xs) = SigmaSeq <$> mapM sigmify xs
 sigmify (P.SigmaLabel l) = sigmify (P.SigmaRef l)
 sigmify (P.SigmaRef' r) = withOverture . sigmify $ P.SigmaRef r
 sigmify (P.SigmaRef r) =
-  do (g, _, _) <- get
+  do g <- getGraph
      case G.search g r of
        [] -> liftIO . throwIO $ ReferenceError r
        (n, P.SigmaPerm _ _) : _ -> return $ SigmaPerm (ByName r) n
@@ -89,12 +101,11 @@ sigmify (P.SigmaPerm ls rs) =
 
 detokifies :: Xified (M.Map Int Sigma, M.Map Int Perm)
 detokifies =
-  do (g, _, _) <- get
-     sps <- mapM go $ G.defs g
+  do sps <- mapM go . G.defs =<< getGraph
      let (ss, ps) = partitionEithers sps
      return (M.fromList ss, M.fromList ps)
   where
-    go (n,t) = liftEither . (n,) <$> detokify t
+    go (n,t) = liftEither . (n,) <$> withRoot n (detokify t)
     liftEither (n, Left a) = Left (n, a)
     liftEither (n, Right b) = Right (n, b)
 
