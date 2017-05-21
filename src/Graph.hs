@@ -11,6 +11,8 @@ import qualified Data.Map as M
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import System.Directory (getCurrentDirectory)
 
+--- definitions
+
 data Node = Def ID P.SigmaToken | Group deriving (Show)
 data Label = Qualified ID | Single ID ID deriving (Show)
 data Precedence = Down | Up | Shadow deriving (Eq, Show)
@@ -36,7 +38,7 @@ empty = do cwd <- getCurrentDirectory
                         , overture = 0
                         , root = 0 }
 
---- graph manipulation
+--- manipulation
 
 edgesFrom :: Graph -> Int -> [Edge]
 edgesFrom g n = maybe [] snd . M.lookup n $ nodes g

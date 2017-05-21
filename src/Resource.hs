@@ -2,6 +2,8 @@ module Resource
 ( module Resource
 ) where
 
+---
+
 import Common (ReadError(LocateError))
 
 import Control.Monad (guard, ap)
@@ -20,6 +22,8 @@ import System.FilePath.Posix ( splitFileName
                              , (<.>))
 import System.IO (openFile, IOMode(ReadMode), hGetContents)
 import System.IO.Error (isDoesNotExistError)
+
+---
 
 data ResourceID = File DeviceID FileID POSIXTime
                 | Raw Int deriving (Eq, Ord, Show)

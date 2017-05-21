@@ -8,7 +8,7 @@ import qualified Data.Map as M
 
 import Data.Function (on)
 
---- sigma data types
+--- definitions
 
 data Ref = Anonymous | ByName String
 
