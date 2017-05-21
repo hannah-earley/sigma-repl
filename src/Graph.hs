@@ -108,3 +108,8 @@ searchAt g n r = reverse . snd $ go (S.empty, []) (n, r)
 
 get :: Graph -> Int -> Maybe P.SigmaToken
 get g n = do { (Def _ s, _) <- M.lookup n $ nodes g ; return s }
+
+defs :: Graph -> [(Int, P.SigmaToken)]
+defs = catMaybes . map f . M.toList . nodes
+  where f (n, (Def _ t, _)) = Just (n, t)
+        f _ = Nothing
