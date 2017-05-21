@@ -9,10 +9,12 @@ import Common (ID, ReadError(..))
 import qualified Parser as P
 import qualified Graph as G
 import qualified Data.Map as M
+import qualified Algorithm as A
 
 import Control.Exception (throwIO)
 import Control.Monad.State
 
+import Data.Either (partitionEithers)
 import Data.Function (on)
 
 --- definitions
@@ -29,12 +31,13 @@ data Permite = PermSeq [Permite]
 
 data Perm = Perm [Permite] [Permite]
 
-data Context = Context { tokens :: M.Map Int Sigma
+data Context = Context { it :: Sigma
+                       , tokens :: M.Map Int Sigma
                        , perms :: M.Map Int Perm
                        , eqcls :: M.Map Int Int
-                       , overture :: M.Map ID Int }
+                       , overture :: G.Graph }
 
-empty = Context M.empty M.empty M.empty M.empty
+-- empty = Context M.empty M.empty M.empty M.empty
 
 ---
 
@@ -63,10 +66,10 @@ permitify (P.SigmaRef r) =
        _ -> liftIO . throwIO $
               OtherError "Perms may only reference other perms"
 permitify (P.SigmaPerm ls rs) =
-  PermPerm Anonymous <$> (permify (ls,rs) >>= insertAnon)
+  PermPerm Anonymous <$> (permify ls rs >>= insertAnon)
 
-permify :: ([P.SigmaToken], [P.SigmaToken]) -> Xified Perm
-permify (ls,rs) =
+permify :: [P.SigmaToken] -> [P.SigmaToken] -> Xified Perm
+permify ls rs =
   do ls' <- mapM permitify ls
      rs' <- mapM permitify rs
      return $ Perm ls' rs'
@@ -82,75 +85,48 @@ sigmify (P.SigmaRef r) =
        (n, P.SigmaPerm _ _) : _ -> return $ SigmaPerm (ByName r) n
        (n, _) : _ -> return $ SigmaTok r n
 sigmify (P.SigmaPerm ls rs) =
-  SigmaPerm Anonymous <$> (permify (ls,rs) >>= insertAnon)
+  SigmaPerm Anonymous <$> (permify ls rs >>= insertAnon)
 
--- permitify :: G.Graph -> [Int] -> P.SigmaToken -> (Permite, M.Map Int Perm, [Int])
--- permitify = undefined
---
--- permify :: t ~ [P.SigmaToken] => G.Graph -> [Int] -> (t,t) -> (Perm, M.Map Int Perm, [Int])
--- permify g ns (l,r) =
---   case permitify g ns (P.SigmaSeq l) of
---     (PermSeq l', m, ns') ->
---       case permitify g ns' (P.SigmaSeq r) of
---         (PermSeq r', m', ns'') ->
---           (Perm l' r', M.unionWith anonerr m m', ns'')
---
--- sigmify :: G.Graph -> [Int] -> P.SigmaToken -> (Sigma, M.Map Int Perm, [Int])
--- sigmify g ns (P.SigmaSeq xs) = wrap $ foldr f ([], M.empty, ns) xs
---   where
---     f x (ys, m, ns') =
---       case sigmify g ns' x of
---         (y, m', ns'') -> (y:ys, M.unionWith anonerr m m', ns'')
---     wrap (ys, m, ns') = (SigmaSeq ys, m, ns')
--- sigmify g ns (P.SigmaLabel l) = sigmify g ns (P.SigmaRef l)
--- sigmify g ns (P.SigmaRef r) =
---   (, M.empty, ns) $
---   case G.search g r of
---     [] -> error ""
---     (n, P.SigmaPerm _ _) : _ -> SigmaPerm (ByName r) n
---     (n, _) : _ -> SigmaTok r n
--- sigmify g ns (P.SigmaRef' r) = sigmify (G.overroot g) ns (P.SigmaRef r)
--- sigmify g ns (P.SigmaPerm l r) =
---   case permify g ns (l,r) of
---     (p, m, n:ns') -> (SigmaPerm Anonymous n, M.insertWith anonerr n p m, ns')
+detokifies :: Xified (M.Map Int Sigma, M.Map Int Perm)
+detokifies =
+  do (g, _, _) <- get
+     sps <- mapM go $ G.defs g
+     let (ss, ps) = partitionEithers sps
+     return (M.fromList ss, M.fromList ps)
+  where
+    go (n,t) = liftEither . (n,) <$> detokify t
+    liftEither (n, Left a) = Left (n, a)
+    liftEither (n, Right b) = Right (n, b)
 
---- contextualise
+detokify :: P.SigmaToken -> Xified (Either Sigma Perm)
+detokify (P.SigmaPerm ls rs) = Right <$> permify ls rs
+detokify t = Left <$> sigmify t
 
--- permify :: t ~ P.SigmaToken -> (t,t) -> [Int] -> (Perm, M.Map Int Perm)
--- permify (ls,rs) ns = undefined
---   where
---     permify' (P.SigmaSeq ts) ns = undefined
---     permify' (P.SigmaLabel l) ns = (PermLabel l, M.empty, ns)
---     permify' (P.SigmaRef )
---
---
--- sigmify :: P.SigmaToken -> [Int] -> (Sigma, M.Map Int Perm)
--- sigmify
---
--- insertAnon :: Context -> P.SigmaToken -> (Context, Int)
--- insertAnon = undefined
+contextualise' :: P.SigmaToken -> Xified Context
+contextualise' p =
+  do (tokens', perms') <- detokifies
+     it' <- sigmify p
+     (g, _, m) <- get
+     let perms'' = M.unionWith err perms' m
 
--- sigmify :: G.Graph -> Context -> P.SigmaToken ->
---
--- insert :: G.Graph -> Context -> Int -> P.SigmaToken -> Context
--- insert g c n (P.SigmaSeq xs) =
---   where
---     m = M.keys $ perms c
---
--- contextualise :: G.Graph -> Context
--- contextualise g =
+     return Context { it = it'
+                    , tokens = tokens'
+                    , perms = perms''
+                    , eqcls = uniqify perms''
+                    , overture = G.overroot g }
+  where err = error "anonymous perm conflict"
 
+contextualise :: G.Graph -> P.SigmaToken -> IO Context
+contextualise g p = evalStateT (contextualise' p) (g, [-1,-2..], M.empty)
 
--- contextualise :: G.Graph -> P.SigmaToken -> Context
--- contextualise = undefined
+--- uniqification
 
---- uniquification
-
-data Sig = Sig [Sigite] [Sigite]
+data Sig = Sig [Sigite] [Sigite] deriving (Eq, Ord)
 
 data Sigite = SigSeq [Sigite]
             | SigLabel Int
             | SigPerm
+            deriving (Eq, Ord)
 
 bruijns :: [Permite] -> M.Map String Int
 bruijns = snd . foldl go (1, M.empty)
@@ -176,3 +152,9 @@ slots (Perm l r) = concatMap go $ l ++ r
     go (PermSeq s) = concatMap go s
     go (PermLabel _) = []
     go (PermPerm _ n) = [n]
+
+sigslots :: Perm -> (Sig, [Int])
+sigslots p = (sig p, slots p)
+
+uniqify :: M.Map Int Perm -> M.Map Int Int
+uniqify = A.index . A.dedup . A.duprep . map (fmap sigslots) . M.toList
