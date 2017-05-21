@@ -8,7 +8,9 @@ import Common (ID)
 import Resource (ResourceID)
 import qualified Parser as P
 
-import Data.List (sort)
+import Control.Monad (guard)
+import Data.Maybe (catMaybes)
+import Data.List (sort, stripPrefix)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
@@ -89,22 +91,17 @@ reroot g r = g { root = r }
 search :: Graph -> ID -> [Int]
 search g r = reverse . snd $ go (S.empty, []) (root g, r)
   where
-    go h@(s,l) q@(n,r')
+    go h@(s,l) q@(n,_)
       | S.member q s = h
-      | otherwise = let s' = S.insert q s
-                    in case M.lookup n $ nodes g of
-                         Nothing -> (s',l)
-                         Just (x,es) ->
-                           let queue = concatMap (query r') $ sort es
-                               h' = (s', collect n x ++ l)
-                           in foldl go h' queue
+      | otherwise = go' (S.insert q s) l q . M.lookup n $ nodes g
+
+    go' s l _ Nothing = (s, l)
+    go' s l (n,r') (Just (x,es)) =
+      let queue = catMaybes . map (query r') $ sort es
+      in foldl go (s, collect n x ++ l) queue
 
     collect n (Def _ _) = [n]
     collect _ _ = []
 
-    query r' (Edge (Qualified p) _ n) =
-      let (p',r'') = splitAt (length p) r'
-      in if p == p' then [(n,r'')] else []
-    query r' (Edge (Single x y) _ n)
-      | x == r' = [(n,y)]
-      | otherwise = []
+    query r' (Edge (Qualified p) _ n) = (n,) <$> stripPrefix p r'
+    query r' (Edge (Single x y) _ n) = guard (x == r') >> return (n,y)
