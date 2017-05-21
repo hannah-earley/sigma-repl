@@ -2,7 +2,11 @@ module Sigma
 ( module Sigma
 ) where
 
-import qualified Map as M
+import qualified Parser as P
+import qualified Graph as G
+import qualified Data.Map as M
+
+import Data.Function (on)
 
 --- sigma data types
 
@@ -24,12 +28,19 @@ data Context = Context { it :: Sigma
                        , eqcls :: M.Map Int Int
                        , overture :: M.Map String Int }
 
+---
+
+--- contextualise
+
+contextualise :: G.Graph -> P.SigmaToken -> Context
+contextualise = undefined
+
 --- uniquification
 
 data Sig = Sig [Sigite] [Sigite]
 
 data Sigite = SigSeq [Sigite]
-            | SigLab Int
+            | SigLabel Int
             | SigPerm
 
 bruijns :: [Permite] -> M.Map String Int
@@ -47,8 +58,8 @@ sig (Perm l r) = (Sig `on` map go) l r
   where
     bs = bruijns $ l ++ r
     go (PermSeq s) = SigSeq $ map go s
-    go (PermLabel l') = SigLabel $ m M.! l'
-    go (PermPerm _) = SigPerm
+    go (PermLabel l') = SigLabel $ bs M.! l'
+    go (PermPerm _ _) = SigPerm
 
 slots :: Perm -> [Int]
 slots (Perm l r) = concatMap go $ l ++ r
