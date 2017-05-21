@@ -2,6 +2,7 @@ module Sigma
 ( module Sigma
 ) where
 
+import Common (ID)
 import qualified Parser as P
 import qualified Graph as G
 import qualified Data.Map as M
@@ -10,14 +11,14 @@ import Data.Function (on)
 
 --- definitions
 
-data Ref = Anonymous | ByName String
+data Ref = Anonymous | ByName ID
 
 data Sigma = SigmaSeq [Sigma]
-           | SigmaTok String Int
+           | SigmaTok ID Int
            | SigmaPerm Ref Int
 
 data Permite = PermSeq [Permite]
-             | PermLabel String
+             | PermLabel ID
              | PermPerm Ref Int
 
 data Perm = Perm [Permite] [Permite]
@@ -26,7 +27,7 @@ data Context = Context { it :: Sigma
                        , tokens :: M.Map Int Sigma
                        , perms :: M.Map Int Perm
                        , eqcls :: M.Map Int Int
-                       , overture :: M.Map String Int }
+                       , overture :: M.Map ID Int }
 
 ---
 

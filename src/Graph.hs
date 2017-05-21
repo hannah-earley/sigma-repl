@@ -7,19 +7,32 @@ module Graph
 import Common (ID)
 import Resource (ResourceID)
 import qualified Parser as P
+
+import Data.List (sort)
 import qualified Data.Map as M
+import qualified Data.Set as S
+
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import System.Directory (getCurrentDirectory)
 
 --- definitions
 
 data Node = Def ID P.SigmaToken | Group deriving (Show)
-data Label = Qualified ID | Single ID ID deriving (Show)
+data Label = Qualified ID | Single ID ID deriving (Eq, Show)
 data Precedence = Down | Up | Shadow deriving (Eq, Show)
 
 data Edge = Edge { label :: Label
                  , precedence :: Precedence
-                 , to :: Int } deriving (Show)
+                 , to :: Int } deriving (Eq, Show)
+
+instance Ord Edge where
+  Edge _ p _ `compare` Edge _ q _ = p `compare` q
+
+instance Ord Precedence where
+  Down <= Up = True
+  Down <= Shadow = True
+  Up <= Shadow = True
+  _ <= _ = False
 
 data Graph = Graph { nodes :: M.Map Int (Node, [Edge])
                    , resources :: M.Map ResourceID (Int, FilePath)
@@ -61,3 +74,37 @@ addEdge g f e = g {nodes = M.adjust (fmap (e:)) f $ nodes g}
 
 addEdges :: Graph -> Int -> [Edge] -> Graph
 addEdges g f = foldr (\e g' -> addEdge g' f e) g
+
+---
+
+reroot :: Graph -> Int -> Graph
+reroot g r = g { root = r }
+
+-- discover :: Graph -> [(ID, Int)]
+-- discover g = discover' (nodes g) (root g)
+--
+-- discover' :: M.Map Int (Node, [Edge]) -> Int -> [(ID, Int)]
+-- discover' m n = undefined
+
+search :: Graph -> ID -> [Int]
+search g r = reverse . snd $ go (S.empty, []) (root g, r)
+  where
+    go h@(s,l) q@(n,r')
+      | S.member q s = h
+      | otherwise = let s' = S.insert q s
+                    in case M.lookup n $ nodes g of
+                         Nothing -> (s',l)
+                         Just (x,es) ->
+                           let queue = concatMap (query r') $ sort es
+                               h' = (s', collect n x ++ l)
+                           in foldl go h' queue
+
+    collect n (Def _ _) = [n]
+    collect _ _ = []
+
+    query r' (Edge (Qualified p) _ n) =
+      let (p',r'') = splitAt (length p) r'
+      in if p == p' then [(n,r'')] else []
+    query r' (Edge (Single x y) _ n)
+      | x == r' = [(n,y)]
+      | otherwise = []

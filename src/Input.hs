@@ -3,9 +3,8 @@
 module Input
 ( loadFile
 , loadFiles
+, loadRaw
 ) where
-
---- imports
 
 import Control.Monad (unless, foldM)
 import qualified Control.Exception as E

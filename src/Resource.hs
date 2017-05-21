@@ -2,8 +2,6 @@ module Resource
 ( module Resource
 ) where
 
----
-
 import Common (ReadError(LocateError))
 
 import Control.Monad (guard, ap)

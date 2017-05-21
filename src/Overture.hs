@@ -4,13 +4,14 @@ module Overture
 ( overture
 ) where
 
+import qualified Graph as G
 import qualified Input as I
 import Text.RawString.QQ (r)
 
-overture :: IO I.Graph
-overture = do g <- I.empty
+overture :: IO G.Graph
+overture = do g <- G.empty
               g' <- I.loadRaw g overture'
-              return $ g' { I.overture = I.root g' }
+              return $ g' { G.overture = G.root g' }
 
 overture' :: String
 overture' = [r|
