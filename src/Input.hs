@@ -1,18 +1,8 @@
 {-# LANGUAGE TupleSections #-}
 
 module Input
-( ID
-, Node(..)
-, Label(..)
-, Precedence(..)
-, Edge(..)
-, Graph(..)
-, empty
-, loadRaw
-, loadFile
+( loadFile
 , loadFiles
-, edgesFrom
-, edgesBy
 ) where
 
 --- imports
@@ -30,7 +20,7 @@ import qualified Data.Map as M
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (withCurrentDirectory)
 
---- scope representation
+--- file graphing
 
 doLoad :: Graph -> (Graph -> a -> IO (Graph, Int)) -> a -> IO Graph
 doLoad g f x = do now <- getPOSIXTime

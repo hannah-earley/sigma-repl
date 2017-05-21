@@ -96,7 +96,8 @@ term = P.labels (parens ttok) labels
                  <|> tdefb <|> tdefl <|> tpermb <|> tperml
 
     filepath = litStr <?> "file path"
-    tinhs = reserved "inh" >> InheritSome <$> filepath >>= (<$> P.many defid)
+    tinhs = reserved "inh" >> InheritSome <$> filepath
+                           >>= (<$> P.many defid)
     tinha = reserved "inh*" >> InheritAll <$> filepath
                             >>= (<$> P.option "" identifier)
 

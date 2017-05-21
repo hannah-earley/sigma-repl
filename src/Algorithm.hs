@@ -8,6 +8,8 @@ import qualified Data.Graph as G
 import Control.Monad (liftM2)
 import Data.Foldable (foldl')
 
+--- Deduplication
+
 distinguish :: Ord r => Partition (r, [r]) -> Partition (r, [r])
 distinguish = subpartition =<< (. snd) . map . (M.!) . index . pmap fst
 
