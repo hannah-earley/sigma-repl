@@ -6,6 +6,7 @@ import Overture ()
 import Algorithm ()
 import Sigma ()
 import Output ()
+import Model ()
 
 import Control.Monad (foldM)
 import System.Environment (getArgs)
