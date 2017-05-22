@@ -1,13 +1,15 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Model
 ( module Model
 ) where
 
 import Sigma
-import Common (ID, ExtendedNat, initlast)
+import Common
+import Output (printx, ShowX)
 import qualified Data.Map.Lazy as M
 import Control.Monad.Except
 import Control.Monad.State
@@ -16,7 +18,6 @@ import Control.Monad.State
 
 data ZigmaSeq = ZigmaSeq [Sigma] [Sigma]
 data Zigma = Zigma [ZigmaSeq] Sigma
-data Breadcrumb = North | East | South | West
 
 back :: Breadcrumb -> Breadcrumb
 back North = South
@@ -60,14 +61,14 @@ data EvalCtx = EvalCtx { remaining :: ExtendedNat
                        , assignments :: M.Map ID Sigma
                        , it :: Zigma }
 
-data EvalError = IncompleteComputation
-               | UnificationError String
-               | MoveError Breadcrumb
-
 type EvalState a = ExceptT EvalError (State EvalCtx) a
+
+--
 
 deplete :: EvalState ()
 deplete = modify $ \c -> c {remaining = pred $ remaining c}
+
+--
 
 getit :: EvalState Sigma
 getit = zget . it <$> get
@@ -75,12 +76,22 @@ getit = zget . it <$> get
 putit :: Sigma -> EvalState ()
 putit s = modify $ \c -> c {it = zput s $ it c}
 
-assign :: M.Map ID Sigma -> EvalState ()
-assign a = modify $ \c -> c {assignments = a}
+geteq :: Int -> EvalState Int
+geteq n = (M.! n) . eqcls . context <$> get
 
-assignLocal :: EvalState a -> EvalState a
-assignLocal f = do { c <- get ; assign M.empty ; x <- f
-                   ; assign $ assignments c ; return x }
+--
+
+modas :: (M.Map ID Sigma -> M.Map ID Sigma) -> EvalState ()
+modas f = modify $ \c -> c {assignments = f $ assignments c}
+
+putas :: M.Map ID Sigma -> EvalState ()
+putas a = modify $ \c -> c {assignments = a}
+
+locas :: EvalState a -> EvalState a
+locas f = do { c <- get ; putas M.empty ; x <- f
+             ; putas $ assignments c ; return x }
+
+--
 
 withMove :: Breadcrumb -> EvalState a -> EvalState a
 withMove b a = move b >> a >>= \x -> move (back b) >> return x
@@ -90,9 +101,12 @@ move b = do (r,z) <- go' b . it <$> get
             unless r . throwError $ MoveError b
             modify $ \c -> c {it = z}
 
---- evaluation
+--
 
-data Direction = Down | Up
+showx :: ShowX a Context => a -> EvalState String
+showx s = printx s . context <$> get
+
+--- evaluation
 
 deref :: EvalState ()
 deref = getit >>= \case
@@ -144,8 +158,47 @@ unifies' [p] = do unify p
                   when b . throwError $
                     UnificationError "too many arguments"
 
+termp :: Direction -> [Permite] -> Bool
+termp _ [] = True
+termp Down (PermSeq _ : _) = True
+termp Up (initlast -> Just (_, PermSeq _)) = True
+termp _ _ = False
+
 unify :: Permite -> EvalState ()
-unify = undefined
+unify (PermSeq xs)
+  | termp Down xs = eval Down >> unifies xs
+  | termp Up xs   = eval Up >> unifies xs
+  | otherwise     = showx (PermSeq xs) >>= throwError . UnificationError .
+                          ("can't unify non-terminal sequence " ++)
+
+unify (PermLabel l) =
+  M.lookup l . assignments <$> get >>= \case
+    Nothing -> getit >>= modas . M.insert l
+    Just y -> getit >>= requiv y
+
+unify (PermPerm _ n) =
+  do deref
+     n' <- geteq n
+     m' <- getit >>= \case
+       SigmaPerm _ m -> geteq m
+       _ -> throwError $ UnificationError "expecting perm, found sequence"
+     unless (m' == n') . throwError $
+       UnificationError "cant equate perms"
+
+requiv :: Sigma -> Sigma -> EvalState ()
+requiv x y = do sx <- showx x
+                sy <- showx y
+                b <- equivp x y
+                unless b . throwError . UnificationError $
+                  "Can't unify " ++ sx ++ " with " ++ sy
+
+equivp :: Sigma -> Sigma -> EvalState Bool
+equivp = undefined
 
 substitute :: Permite -> EvalState Sigma
-substitute = undefined
+substitute (PermSeq xs) = SigmaSeq <$> mapM substitute xs
+substitute (PermLabel l) =
+  M.lookup l . assignments <$> get >>= \case
+    Nothing -> throwError . UnificationError $ "can't substitute " ++ l
+    Just s -> return s
+substitute (PermPerm r n) = return $ SigmaPerm r n
