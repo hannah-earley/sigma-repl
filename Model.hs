@@ -76,12 +76,12 @@ showdat d = "{" ++ showseq d ++ "}"
 
 showdatl (DataSeq (Ref "cons") (DataSeq x y)) = show x : showdatl y
 showdatl (DataSeq (Ref "nil") Stop) = []
-showdatl x = [". " ++ show x]
+showdatl x = [": " ++ show x]
 
 showdatn :: Int -> Expr ID ID -> String
 showdatn n (DataSeq (Ref "succ") m) = showdatn (n+1) m
 showdatn n (DataSeq (Ref "zero") Stop) = show n
-showdatn n x = "{#" ++ show n ++ " . " ++ show x ++ "}"
+showdatn n x = "{#" ++ show n ++ " : " ++ show x ++ "}"
 
 --- deäliasing machinery
 
@@ -272,10 +272,7 @@ equivify m c e e' = if equivalentp c e e' then Just m else Nothing
 reduce :: x ~ (Maybe Int, Expression) => Ctx -> x -> x
 reduce _ x@(n, _) | maybe False (<0) n = x
 reduce c (pn -> n, As _ e) = reduce c (n, e)
-reduce c (n, Ref r) = maybe (n, Ref r) next $ fetch c r
-  where
-    next x@(As _ _) = reduce c (n, x)
-    next x = (n, x)
+reduce c (n, Ref r) = maybe (n, Ref r) (reduce c . (pn n,)) $ fetch c r
 reduce _ x = x
 
 unify :: m ~ (Maybe Int, Map ID Expression) => Ctx -> Expression -> Expression -> m -> Maybe m
