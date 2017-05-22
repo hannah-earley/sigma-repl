@@ -5,6 +5,7 @@ import Parser ()
 import Overture ()
 import Algorithm ()
 import Sigma ()
+import Model ()
 
 import Control.Monad (foldM)
 import System.Environment (getArgs)
