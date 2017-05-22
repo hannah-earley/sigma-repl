@@ -14,9 +14,10 @@ import qualified Data.Map.Lazy as M
 import Control.Monad.Except
 import Control.Monad.State
 
---- Sigma Zipper
+--- sigma zipper
 
 data ZigmaSeq = ZigmaSeq [Sigma] [Sigma]
+
 data Zigma = Zigma [ZigmaSeq] Sigma
 
 back :: Breadcrumb -> Breadcrumb
@@ -106,17 +107,22 @@ move b = do (r,z) <- go' b . it <$> get
 showx :: ShowX a Context => a -> EvalState String
 showx s = printx s . context <$> get
 
---- evaluation
+--
+
+deref' :: Int -> EvalState Sigma
+deref' n = (M.! n) . tokens . context <$> get
 
 deref :: EvalState ()
 deref = getit >>= \case
-          SigmaTok _ n -> putit . (M.! n) . tokens . context =<< get
+          SigmaTok _ n -> deref' n >>= putit
           _ -> return ()
 
 getperm :: Sigma -> EvalState (Maybe Perm)
 getperm (SigmaTok _ n) = getperm . (M.! n) . tokens . context =<< get
 getperm (SigmaPerm _ n) = M.lookup n . perms . context <$> get
 getperm _ = return Nothing
+
+--- evaluation
 
 eval :: Direction -> EvalState ()
 eval d = getit >>= \case
@@ -158,32 +164,33 @@ unifies' [p] = do unify p
                   when b . throwError $
                     UnificationError "too many arguments"
 
-termp :: Direction -> [Permite] -> Bool
-termp _ [] = True
-termp Down (PermSeq _ : _) = True
-termp Up (initlast -> Just (_, PermSeq _)) = True
-termp _ _ = False
-
 unify :: Permite -> EvalState ()
+unify (PermPerm r n) = getit >>= requiv (SigmaPerm r n)
+unify (PermLabel l) =
+  M.lookup l . assignments <$> get >>= \case
+    Nothing -> getit >>= modas . M.insert l
+    Just y -> getit >>= requiv y
 unify (PermSeq xs)
   | termp Down xs = eval Down >> unifies xs
   | termp Up xs   = eval Up >> unifies xs
   | otherwise     = showx (PermSeq xs) >>= throwError . UnificationError .
                           ("can't unify non-terminal sequence " ++)
 
-unify (PermLabel l) =
+substitute :: Permite -> EvalState Sigma
+substitute (PermPerm r n) = return $ SigmaPerm r n
+substitute (PermSeq xs) = SigmaSeq <$> mapM substitute xs
+substitute (PermLabel l) =
   M.lookup l . assignments <$> get >>= \case
-    Nothing -> getit >>= modas . M.insert l
-    Just y -> getit >>= requiv y
+    Nothing -> throwError . UnificationError $ "can't substitute " ++ l
+    Just s -> return s
 
-unify (PermPerm _ n) =
-  do deref
-     n' <- geteq n
-     m' <- getit >>= \case
-       SigmaPerm _ m -> geteq m
-       _ -> throwError $ UnificationError "expecting perm, found sequence"
-     unless (m' == n') . throwError $
-       UnificationError "cant equate perms"
+--- predicates
+
+termp :: Direction -> [Permite] -> Bool
+termp _ [] = True
+termp Down (PermSeq _ : _) = True
+termp Up (initlast -> Just (_, PermSeq _)) = True
+termp _ _ = False
 
 requiv :: Sigma -> Sigma -> EvalState ()
 requiv x y = do sx <- showx x
@@ -193,12 +200,21 @@ requiv x y = do sx <- showx x
                   "Can't unify " ++ sx ++ " with " ++ sy
 
 equivp :: Sigma -> Sigma -> EvalState Bool
-equivp = undefined
+equivp (SigmaTok _ n) (SigmaTok _ m)
+  | m == n    = return True
+  | otherwise = do m' <- deref' m
+                   n' <- deref' n
+                   equivp m' n'
+equivp (SigmaTok _ n) m = deref' n >>= equivp m
+equivp n (SigmaTok _ m) = deref' m >>= equivp n
 
-substitute :: Permite -> EvalState Sigma
-substitute (PermSeq xs) = SigmaSeq <$> mapM substitute xs
-substitute (PermLabel l) =
-  M.lookup l . assignments <$> get >>= \case
-    Nothing -> throwError . UnificationError $ "can't substitute " ++ l
-    Just s -> return s
-substitute (PermPerm r n) = return $ SigmaPerm r n
+equivp (SigmaSeq []) (SigmaSeq []) = return True
+equivp (SigmaSeq (x:xs)) (SigmaSeq (y:ys)) =
+  do b <- equivp x y
+     b' <- equivp (SigmaSeq xs) (SigmaSeq ys)
+     return $ b && b'
+
+equivp (SigmaPerm _ n) (SigmaPerm _ m) =
+  do { n' <- geteq n ; m' <- geteq m ; return $ m' == n' }
+
+equivp _ _ = return False
