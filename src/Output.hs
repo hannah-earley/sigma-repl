@@ -2,8 +2,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ViewPatterns #-}
 
-module Model
-( module Model
+module Output
+( module Output
 ) where
 
 import Sigma
@@ -13,7 +13,7 @@ import Graph (search)
 import Control.Monad.State
 import qualified Data.Map.Lazy as M
 
---- print
+--- stateful printing
 
 printx :: ShowX a Context => a -> Context -> String
 printx = evalState . showx
@@ -23,6 +23,8 @@ class ShowX a x where
 
 showsx :: ShowX a x => [a] -> State x String
 showsx = fmap unwords . mapM showx
+
+--- core rendering
 
 instance ShowX Perm Context where
   showx (Perm ls rs) =
@@ -50,6 +52,8 @@ s2p (SigmaSeq xs) = PermSeq $ map s2p xs
 s2p (SigmaTok l _) = PermLabel l
 s2p (SigmaPerm r n) = PermPerm r n
 
+--- syntactical resugaring
+
 data Dat = DatCons Permite Permite | DatNil
          | DatSucc Permite | DatZero
          | DatDat [Permite]
@@ -59,21 +63,27 @@ ocls r = do (o,c) <- liftM2 (,) overture eqcls <$> get
             return $ c M.! (fst . head $ search o r)
 
 getdat :: [Permite] -> State Context (Either [Permite] Dat)
+getdat [PermSeq [], x'@(PermPerm _ x), y, z, PermSeq []] =
+  do c <- eqcls <$> get
+     [cc,nc] <- mapM ocls ["cons", "nil"]
+     return . Right $ getdatl x' (c M.! x) cc nc y z
 getdat [PermSeq [], x'@(PermPerm _ x), y, PermSeq []] =
   do c <- eqcls <$> get
-     cs <- mapM ocls ["cons", "nil", "succ", "zero"]
-     return . Right $ getdat' x' (c M.! x) cs y
+     [sc,zc] <- mapM ocls ["succ", "zero"]
+     return . Right $ getdatn x' (c M.! x) sc zc y
 getdat (initlast -> Just (PermSeq [] : d, PermSeq [])) =
   return . Right $ DatDat d
 getdat s = return $ Left s
 
-getdat' :: Permite -> Int -> [Int] -> Permite -> Dat
-getdat' _ x [cc,_,_,_] (PermSeq [PermSeq[],y1,y2,PermSeq[]])
-  | x == cc = DatCons y1 y2
-getdat' _ x [_,nc,_,_] (PermSeq[]) | x == nc = DatNil
-getdat' _ x [_,_,sc,_] n | x == sc = DatSucc n
-getdat' _ x [_,_,_,zc] (PermSeq[]) | x == zc = DatZero
-getdat' x _ _ y = DatDat [x,y]
+getdatl :: Permite -> Int -> Int -> Int -> Permite -> Permite -> Dat
+getdatl _ x cc _ y z | x == cc = DatCons y z
+getdatl _ x _ nc (PermSeq[]) (PermSeq[]) | x == nc = DatNil
+getdatl x _ _ _ y z = DatDat [x,y,z]
+
+getdatn :: Permite -> Int -> Int -> Int -> Permite -> Dat
+getdatn _ x sc _ m | x == sc = DatSucc m
+getdatn _ x _ zc (PermSeq[]) | x == zc = DatZero
+getdatn x _ _ _ y = DatDat [x,y]
 
 showdat :: Dat -> State Context String
 showdat (DatCons x y) =
@@ -105,5 +115,3 @@ showdatn n x@(PermSeq x') =
        Right (DatZero) -> return $ show n
        _ -> ((++) $ "{#" ++ show n ++ " . ") . (++ "}") <$> showx x
 showdatn n x = ((++) $ "{#" ++ show n ++ " . ") . (++ "}") <$> showx x
-
---- eval
