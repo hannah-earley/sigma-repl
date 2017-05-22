@@ -1,6 +1,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Output
 ( printx
@@ -35,10 +36,9 @@ instance ShowX Perm Context where
 instance ShowX Permite Context where
   showx (PermSeq []) = return "#"
   showx (PermSeq s) =
-    do x <- getdat s
-       case x of
-         Left p -> ("(" ++) . (++ ")") <$> showsx p
-         Right d -> showdat d
+    getdat s >>= \case
+      Left p -> ("(" ++) . (++ ")") <$> showsx p
+      Right d -> showdat d
   showx (PermLabel l) = return l
   showx (PermPerm (ByName r) _) = return r
   showx (PermPerm Anonymous n) =
@@ -97,21 +97,19 @@ showdat (DatDat d) = ("{" ++) . (++ "}") <$> showsx d
 
 showdatl :: Permite -> State Context [String]
 showdatl x@(PermSeq x') =
-  do x'' <- getdat x'
-     case x'' of
-       Right (DatCons y z) ->
-         do ys <- showx y
-            zs <- showdatl z
-            return $ ys : zs
-       Right DatNil -> return []
-       _ -> (:[]) . (". " ++) <$> showx x
+  getdat x' >>= \case
+    Right (DatCons y z) ->
+     do ys <- showx y
+        zs <- showdatl z
+        return $ ys : zs
+    Right DatNil -> return []
+    _ -> (:[]) . (". " ++) <$> showx x
 showdatl x = (:[]) . (". " ++) <$> showx x
 
 showdatn :: Int -> Permite -> State Context String
 showdatn n x@(PermSeq x') =
-  do x'' <- getdat x'
-     case x'' of
-       Right (DatSucc m) -> showdatn (n+1) m
-       Right (DatZero) -> return $ show n
-       _ -> ((++) $ "{#" ++ show n ++ " . ") . (++ "}") <$> showx x
+  getdat x' >>= \case
+    Right (DatSucc m) -> showdatn (n+1) m
+    Right (DatZero) -> return $ show n
+    _ -> ((++) $ "{#" ++ show n ++ " . ") . (++ "}") <$> showx x
 showdatn n x = ((++) $ "{#" ++ show n ++ " . ") . (++ "}") <$> showx x

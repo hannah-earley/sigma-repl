@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 module Main where
 
 import Input ()
@@ -23,7 +25,6 @@ main = getArgs >>= foldM load emptyContext
 
 loop :: () -> InputT IO ()
 loop c = handleInterrupt (loop c) $
-         do cmd <- getInputLine "σ> "
-            case cmd of
-              Just cmd' -> outputStrLn (cmd' ++ "\n") >> loop c
-              Nothing -> return ()
+           getInputLine "σ> " >>= \case
+             Just cmd' -> outputStrLn (cmd' ++ "\n") >> loop c
+             Nothing -> return ()
