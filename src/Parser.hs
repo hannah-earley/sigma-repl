@@ -166,8 +166,8 @@ ssugar = sstop <|> sdata <|> snat <|> slist
 
     slist = brackets (P.optionMaybe stok >>= slist') <?> "list"
       where
-        co x z = wrap [SigmaRef' "cons", wrap [x,z]]
-        ni = wrap [SigmaRef' "nil", stop]
+        co x z = wrap [SigmaRef' "cons", x, z]
+        ni = wrap [SigmaRef' "nil", stop, stop]
         slist' Nothing = return ni
         slist' (Just x) = flip (foldr co) . (x:) <$> P.many stok
                             >>= (<$> P.option ni (dot >> stok))
