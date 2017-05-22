@@ -8,8 +8,9 @@ module Model
 
 import Sigma
 import Common (ID, ExtendedNat, initlast)
-import Control.Monad.State
 import qualified Data.Map.Lazy as M
+import Control.Monad.Except
+import Control.Monad.State
 
 --- Sigma Zipper
 
@@ -63,8 +64,7 @@ data EvalError = IncompleteComputation
                | UnificationError String
                | MoveError Breadcrumb
 
--- type EvalState a = EitherT EvalError (State EvalCtx) a
-type EvalState a = State EvalCtx a
+type EvalState a = ExceptT EvalError (State EvalCtx) a
 
 deplete :: EvalState ()
 deplete = modify $ \c -> c {remaining = pred $ remaining c}
@@ -74,9 +74,6 @@ getit = zget . it <$> get
 
 putit :: Sigma -> EvalState ()
 putit s = modify $ \c -> c {it = zput s $ it c}
-
--- modit :: (Zigma -> Zigma) -> EvalState ()
--- modit f = modify $ \c -> c {it = f $ it c}
 
 assign :: M.Map ID Sigma -> EvalState ()
 assign a = modify $ \c -> c {assignments = a}
@@ -90,10 +87,10 @@ withMove b a = move b >> a >>= \x -> move (back b) >> return x
 
 move :: Breadcrumb -> EvalState ()
 move b = do (r,z) <- go' b . it <$> get
-            unless r $ fail "move error"
+            unless r . throwError $ MoveError b
             modify $ \c -> c {it = z}
 
---- evaluation functions
+--- evaluation
 
 data Direction = Down | Up
 
@@ -130,18 +127,22 @@ eval'' ls rs = do unifies ls
                   putit $ SigmaSeq rs'
                   deplete
 
+--- unification
+
 unifies :: [Permite] -> EvalState ()
 unifies [] = getit >>= \case
                SigmaSeq [] -> return ()
                SigmaTok _ _ -> deref >> unifies []
-               SigmaPerm _ _ -> fail "unification error"
+               SigmaPerm _ _ -> throwError $
+                 UnificationError "expecting sequence, found perm"
 unifies ps = withMove South $ unifies' ps
 
 unifies' :: [Permite] -> EvalState ()
 unifies' (p:ps@(_:_)) = unify p >> move East >> unifies' ps
 unifies' [p] = do unify p
                   (b,_) <- go' East . it <$> get
-                  when b $ fail "unification error"
+                  when b . throwError $
+                    UnificationError "too many arguments"
 
 unify :: Permite -> EvalState ()
 unify = undefined
