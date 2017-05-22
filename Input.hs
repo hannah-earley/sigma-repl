@@ -245,14 +245,19 @@ expr = largest $ parse atom
 
     -- literals
 
-    lit = lnat <||> ldata <||> llist
+    lit = lnat <||> ldata <||> llist <||> llistimp
 
     ldata = brack "{}" $ wrap <$> many expr
 
+    llistimp = brack "[]" $ do cars <- many1 expr
+                               symbol ":"
+                               cdr <- expr
+                               return $ foldr co cdr cars
+
     llist = brack "[]" $ foldr co ni <$> many expr
-      where
-        co x z = wrap [Ref "cons", wrap [x, z]]
-        ni = wrap [Ref "nil", Stop]
+
+    co x z = wrap [Ref "cons", wrap [x, z]]
+    ni = wrap [Ref "nil", Stop]
 
     lnat = wnat <$> token nat
       where

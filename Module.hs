@@ -190,7 +190,7 @@ combine c (n', c') = let reexps = keys $ expd c `intersection` expd c'
                         else return (n', CtxTemp (syms c `union` syms c')
                                                  (expd c `union` expd c'))
 
---- incompilation
+--- incremental compilation
 
 incompile' :: AOS e r => Int -> Group e r -> TempContext e r
 incompile' n g = foldr (\x z -> z >>= collate x) (lift n g) (children g)
