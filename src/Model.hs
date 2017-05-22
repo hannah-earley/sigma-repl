@@ -66,8 +66,15 @@ type EvalState a = ExceptT EvalError (State EvalCtx) a
 
 --
 
+remguard :: EvalState ()
+remguard = do b <- (>0) . remaining <$> get
+              unless b $ throwError IncompleteError
+
 deplete :: EvalState ()
-deplete = modify $ \c -> c {remaining = pred $ remaining c}
+deplete = remguard >> modify $ \c -> c {remaining = pred $ remaining c}
+
+replete :: ExtendedNat -> EvalState ()
+replete n = modify $ \c -> c {remaining = n}
 
 --
 
@@ -142,7 +149,8 @@ eval' Up (initlast -> Just (_,p)) =
 eval' _ _ = return ()
 
 eval'' :: [Permite] -> [Permite] -> EvalState ()
-eval'' ls rs = do unifies ls
+eval'' ls rs = do remguard
+                  unifies ls
                   rs' <- mapM substitute rs
                   putit $ SigmaSeq rs'
                   deplete
