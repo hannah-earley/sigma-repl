@@ -2,7 +2,12 @@
 {-# LANGUAGE TupleSections #-}
 
 module Sigma
-( module Sigma
+( Ref(..)
+, Sigma(..)
+, Permite(..)
+, Perm(..)
+, Context(..)
+, contextualise
 ) where
 
 import Common (ID, ReadError(..))
@@ -39,7 +44,7 @@ data Context = Context { it :: Sigma
                        , eqcls :: M.Map Int Int
                        , overture :: G.Graph } deriving (Show)
 
----
+--- compilation / contextualisation
 
 type Xified a = StateT (G.Graph, [Int], M.Map Int Perm) IO a
 

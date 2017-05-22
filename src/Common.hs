@@ -23,3 +23,9 @@ instance E.Exception ReadError where
   displayException (InconsistencyError p) =
     "File " ++ p ++ " changed whilst loading"
   displayException (OtherError e) = e
+
+initlast :: [a] -> Maybe ([a],a)
+initlast = foldr go Nothing
+  where
+    go x Nothing = Just ([],x)
+    go x (Just (is,l)) = Just (x:is,l)
