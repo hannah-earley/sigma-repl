@@ -6,8 +6,13 @@ module Common
 
 import Data.Typeable (Typeable)
 import qualified Control.Exception as E
+import Numeric.Natural
+
+--- common data definitions
 
 type ID = String
+
+--- exceptions
 
 data ReadError = LocateError FilePath
                | ParseError String
@@ -26,7 +31,47 @@ instance E.Exception ReadError where
     "File " ++ p ++ " changed whilst loading"
   displayException (OtherError e) = e
 
+--- view patterns
+
 initlast :: [a] -> Maybe ([a],a)
 initlast = foldr go Nothing
   where go x Nothing = Just ([],x)
         go x (Just (is,l)) = Just (x:is,l)
+
+--- extended naturals
+
+data ExtendedNat = Finite Natural | Infinite deriving (Eq, Ord, Show)
+
+instance Enum ExtendedNat where
+  toEnum = Finite . toEnum
+  fromEnum (Finite n) = fromEnum n
+  fromEnum Infinite = maxBound
+
+  succ (Finite a) = Finite (succ a)
+  succ Infinite = Infinite
+
+  pred (Finite a) = Finite (pred a)
+  pred Infinite = Infinite
+
+instance Num ExtendedNat where
+  Finite a + Finite b = Finite $ a + b
+  Infinite + _ = Infinite
+  _ + Infinite = Infinite
+
+  Finite a - Finite b = Finite $ a - b
+  Infinite - _ = Infinite
+  Finite _ - Infinite = -Infinite
+
+  Finite a * Finite b = Finite $ a * b
+  Infinite * _ = Infinite
+  _ * Infinite = Infinite
+
+  signum (Finite 0) = Finite 0
+  signum _ = Finite 1
+
+  fromInteger = Finite . fromInteger
+
+  abs = id
+
+  negate (Finite a) = Finite $ negate a
+  negate Infinite = E.throw E.Underflow
