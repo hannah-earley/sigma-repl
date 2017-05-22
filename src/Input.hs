@@ -64,7 +64,7 @@ addPlaceholder :: Graph -> ResourceID -> FilePath -> (Graph, Int, Int)
 addPlaceholder g0 r f =
   let (g1,m) = insertNode g0 Group
       (g2,n) = insertNode g1 Group
-      g3 = addEdge g2 n (Edge (Qualified "") Up m)
+      g3 = addEdge g2 n (Edge (Qualified "") Neighbourhood m)
       g4 = g3 {resources = M.insert r (m,f) $ resources g3}
   in (g4,m,n)
 
@@ -85,29 +85,29 @@ applyTerm :: (Graph,Int,Int) -> P.Term -> IO Graph
 
 applyTerm (g,_,n) (P.InheritAll fp pre) =
   do (g',l) <- getInheritance g fp
-     return $ addEdge g' n $ Edge (Qualified pre) Down l
+     return $ addEdge g' n $ Edge (Qualified pre) Local l
 
 applyTerm (g,_,n) (P.InheritSome fp xs) =
   do (g',l) <- getInheritance g fp
-     let xs' = map (\(x,y) -> Edge (Single x y) Down l) xs
+     let xs' = map (\(x,y) -> Edge (Single x y) Local l) xs
      return $ addEdges g' n xs'
 
 applyTerm (g,m,n) P.BequeathAll =
-  return $ addEdge g m (Edge (Qualified "") Down n)
+  return $ addEdge g m (Edge (Qualified "") Local n)
 
 applyTerm (g,m,n) (P.BequeathSome xs) =
-  return $ addEdges g m $ map (\(x,y) -> Edge (Single y x) Down n) xs
+  return $ addEdges g m $ map (\(x,y) -> Edge (Single y x) Local n) xs
 
 applyTerm (g,_,n) (P.Group ts) =
   let (g',n') = insertNode g Group
-      g'' = addEdge g' n' (Edge (Qualified "") Up n)
+      g'' = addEdge g' n' (Edge (Qualified "") Neighbourhood n)
   in applyTerms (g'',n,n') ts
 
 applyTerm (g,_,n) (P.LocalDef x z) =
   let (g',n') = insertNode g (Def x z)
-      g'' = addEdge g' n (Edge (Single x x) Down n')
-  in return $ addEdge g'' n' (Edge (Qualified "") Up n)
+      g'' = addEdge g' n (Edge (Single x x) Local n')
+  in return $ addEdge g'' n' (Edge (Qualified "") Neighbourhood n)
 
 applyTerm (g,m,n) (P.BequeathDef (x,y) z) =
   do g' <- applyTerm (g,m,n) (P.LocalDef x z)
-     return $ addEdge g' m (Edge (Single y x) Down n)
+     return $ addEdge g' m (Edge (Single y x) Local n)

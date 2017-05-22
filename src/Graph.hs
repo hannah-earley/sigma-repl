@@ -21,7 +21,7 @@ import System.Directory (getCurrentDirectory)
 
 data Node = Def ID P.SigmaToken | Group deriving (Show)
 data Label = Qualified ID | Single ID ID deriving (Eq, Show)
-data Precedence = Down | Up | Shadow deriving (Eq, Show)
+data Precedence = Local | Neighbourhood | Shadow deriving (Eq, Ord, Show)
 
 data Edge = Edge { label :: Label
                  , precedence :: Precedence
@@ -29,12 +29,6 @@ data Edge = Edge { label :: Label
 
 instance Ord Edge where
   Edge _ p _ `compare` Edge _ q _ = p `compare` q
-
-instance Ord Precedence where
-  Down <= Up = True
-  Down <= Shadow = True
-  Up <= Shadow = True
-  _ <= _ = False
 
 data Graph = Graph { nodes :: M.Map Int (Node, [Edge])
                    , resources :: M.Map ResourceID (Int, FilePath)
@@ -64,7 +58,7 @@ edgesBy p g f = filter (\e -> precedence e == p) $ edgesFrom g f
 stack :: Graph -> Int -> Int -> (Graph, Int)
 stack g prefer backup =
   let (g',n) = insertNode g Group
-  in (,n) $ addEdges g' n [ Edge (Qualified "") Down prefer
+  in (,n) $ addEdges g' n [ Edge (Qualified "") Local prefer
                           , Edge (Qualified "") Shadow backup ]
 
 insertNode :: Graph -> Node -> (Graph, Int)

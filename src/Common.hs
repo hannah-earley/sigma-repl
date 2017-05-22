@@ -12,7 +12,7 @@ import Numeric.Natural
 
 type ID = String
 
---- exceptions
+--- reading
 
 data ReadError = LocateError FilePath
                | ParseError String
@@ -30,6 +30,16 @@ instance E.Exception ReadError where
   displayException (InconsistencyError p) =
     "File " ++ p ++ " changed whilst loading"
   displayException (OtherError e) = e
+
+--- evaluation
+
+data Direction = Up | Down
+
+data Breadcrumb = North | East | South | West
+
+data EvalError = IncompleteComputation
+               | UnificationError String
+               | MoveError Breadcrumb
 
 --- view patterns
 
