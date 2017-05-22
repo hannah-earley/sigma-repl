@@ -169,7 +169,7 @@ compExpr (n,_,s,t) (Ref r') =
         _ -> case S.resolve t r' of
           Nothing -> Left $ UndefinedReference r'
           Just p -> Right . (n,,[]) . Mo.EPerm $ Mo.Remote p
-compExpr _ _ = undefined
+compExpr _ _ = error "unexpected as/label expression in compExpr"
   -- as and labels should have been purged by flatten
 
 compPExpr :: CompContext -> Expr -> Compiled Mo.PExpr
