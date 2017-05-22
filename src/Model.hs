@@ -17,11 +17,17 @@ data ZigmaSeq = ZigmaSeq [Sigma] [Sigma]
 data Zigma = Zigma [ZigmaSeq] Sigma
 data Breadcrumb = North | East | South | West
 
+back :: Breadcrumb -> Breadcrumb
+back North = South
+back East = West
+back South = North
+back West = East
+
 tozip :: Sigma -> Zigma
 tozip = Zigma []
 
 fromzip :: Zigma -> Sigma
-fromzip = (\(Zigma [] s) -> s) . goend North
+fromzip = zget . goend North
 
 go :: Breadcrumb -> Zigma -> Zigma
 go b = snd . go' b
@@ -40,15 +46,22 @@ go' South (Zigma zs (SigmaSeq (x:xs))) =
   (True, Zigma (ZigmaSeq [] xs : zs) x)
 go' _ z = (False, z)
 
+zget :: Zigma -> Sigma
+zget (Zigma _ s) = s
+
+zput :: Sigma -> Zigma -> Zigma
+zput s (Zigma z _) = Zigma z s
+
 --- evaluation context & manipulation
 
 data EvalCtx = EvalCtx { remaining :: ExtendedNat
                        , context :: Context
                        , assignments :: M.Map ID Sigma
-                       , it :: Sigma }
+                       , it :: Zigma }
 
 data EvalError = IncompleteComputation
                | UnificationError String
+               | MoveError Breadcrumb
 
 -- type EvalState a = EitherT EvalError (State EvalCtx) a
 type EvalState a = State EvalCtx a
@@ -57,10 +70,13 @@ deplete :: EvalState ()
 deplete = modify $ \c -> c {remaining = pred $ remaining c}
 
 getit :: EvalState Sigma
-getit = it <$> get
+getit = zget . it <$> get
 
 putit :: Sigma -> EvalState ()
-putit s = modify $ \c -> c {it = s}
+putit s = modify $ \c -> c {it = zput s $ it c}
+
+-- modit :: (Zigma -> Zigma) -> EvalState ()
+-- modit f = modify $ \c -> c {it = f $ it c}
 
 assign :: M.Map ID Sigma -> EvalState ()
 assign a = modify $ \c -> c {assignments = a}
@@ -69,27 +85,13 @@ assignLocal :: EvalState a -> EvalState a
 assignLocal f = do { c <- get ; assign M.empty ; x <- f
                    ; assign $ assignments c ; return x }
 
-foldSeq :: (a -> EvalState a) -> a -> EvalState a
-foldSeq f z = do s <- getit
-                 y <- case s of
-                   SigmaSeq xs -> foldSeq' xs z
-                   _ -> f z
-                 putit s
-                 return y
-  where
-    foldSeq' [] z' = return z'
-    foldSeq' (x:xs) z' = putit x >> f z' >>= foldSeq' xs
+withMove :: Breadcrumb -> EvalState a -> EvalState a
+withMove b a = move b >> a >>= \x -> move (back b) >> return x
 
-zipSeq :: (a -> EvalState b) -> [a] -> EvalState [b]
-zipSeq f as = do s <- getit
-                 y <- case s of
-                   SigmaSeq xs -> zipSeq' as xs
-                   _ -> zipSeq' as [s]
-                 putit s
-                 return y
-  where
-    zipSeq' (z:zs) (x:xs) = putit x >> f z >>= (<$> zipSeq' zs xs) . (:)
-    zipSeq' _ _ = return []
+move :: Breadcrumb -> EvalState ()
+move b = do (r,z) <- go' b . it <$> get
+            unless r $ fail "move error"
+            modify $ \c -> c {it = z}
 
 --- evaluation functions
 
@@ -123,10 +125,23 @@ eval' Up (initlast -> Just (_,p)) =
 eval' _ _ = return ()
 
 eval'' :: [Permite] -> [Permite] -> EvalState ()
-eval'' l r = do zipSeq unify l
-                r' <- mapM substitute r
-                putit $ SigmaSeq r'
-                deplete
+eval'' ls rs = do unifies ls
+                  rs' <- mapM substitute rs
+                  putit $ SigmaSeq rs'
+                  deplete
+
+unifies :: [Permite] -> EvalState ()
+unifies [] = getit >>= \case
+               SigmaSeq [] -> return ()
+               SigmaTok _ _ -> deref >> unifies []
+               SigmaPerm _ _ -> fail "unification error"
+unifies ps = withMove South $ unifies' ps
+
+unifies' :: [Permite] -> EvalState ()
+unifies' (p:ps@(_:_)) = unify p >> move East >> unifies' ps
+unifies' [p] = do unify p
+                  (b,_) <- go' East . it <$> get
+                  when b $ fail "unification error"
 
 unify :: Permite -> EvalState ()
 unify = undefined
