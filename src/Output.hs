@@ -3,7 +3,7 @@
 {-# LANGUAGE ViewPatterns #-}
 
 module Output
-( module Output
+( printx
 ) where
 
 import Sigma
