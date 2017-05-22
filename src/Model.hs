@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 
@@ -10,24 +11,56 @@ import Common (ID, ExtendedNat, initlast)
 import Control.Monad.State
 import qualified Data.Map.Lazy as M
 
+--- Sigma Zipper
+
+data ZigmaSeq = ZigmaSeq [Sigma] [Sigma]
+data Zigma = Zigma [ZigmaSeq] Sigma
+data Breadcrumb = North | East | South | West
+
+tozip :: Sigma -> Zigma
+tozip = Zigma []
+
+fromzip :: Zigma -> Sigma
+fromzip = (\(Zigma [] s) -> s) . goend North
+
+go :: Breadcrumb -> Zigma -> Zigma
+go b = snd . go' b
+
+goend :: Breadcrumb -> Zigma -> Zigma
+goend b = snd . until (not . fst) (go' b . snd) . (True,)
+
+go' :: Breadcrumb -> Zigma -> (Bool, Zigma)
+go' North (Zigma (ZigmaSeq ls rs : zs) r) =
+  (True, Zigma zs . SigmaSeq $ foldl (flip (:)) (r:rs) ls)
+go' East (Zigma (ZigmaSeq ls (r:rs) : zs) l) =
+  (True, Zigma (ZigmaSeq (l:ls) rs : zs) r)
+go' West (Zigma (ZigmaSeq (l:ls) rs : zs) r) =
+  (True, Zigma (ZigmaSeq ls (r:rs) : zs) l)
+go' South (Zigma zs (SigmaSeq (x:xs))) =
+  (True, Zigma (ZigmaSeq [] xs : zs) x)
+go' _ z = (False, z)
+
 --- evaluation context & manipulation
 
 data EvalCtx = EvalCtx { remaining :: ExtendedNat
                        , context :: Context
-                       , assignments :: M.Map ID Sigma }
+                       , assignments :: M.Map ID Sigma
+                       , it :: Sigma }
 
+data EvalError = IncompleteComputation
+               | UnificationError String
+
+-- type EvalState a = EitherT EvalError (State EvalCtx) a
 type EvalState a = State EvalCtx a
 
 deplete :: EvalState ()
 deplete = modify $ \c -> c {remaining = pred $ remaining c}
 
 getit :: EvalState Sigma
-getit = it . context <$> get
+getit = it <$> get
 
 putit :: Sigma -> EvalState ()
-putit = modify . modcx . setit
-setit s c = c {it = s}
-modcx f c = c {context = f $ context c}
+putit s = modify $ \c -> c {it = s}
 
 assign :: M.Map ID Sigma -> EvalState ()
 assign a = modify $ \c -> c {assignments = a}
