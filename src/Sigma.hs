@@ -39,8 +39,7 @@ data Permite = PermSeq [Permite]
 
 data Perm = Perm [Permite] [Permite] deriving (Show)
 
-data Context = Context { it :: Sigma
-                       , tokens :: M.Map Int Sigma
+data Context = Context { tokens :: M.Map Int Sigma
                        , perms :: M.Map Int Perm
                        , eqcls :: M.Map Int Int
                        , overture :: G.Graph } deriving (Show)
@@ -118,21 +117,20 @@ detokify :: P.SigmaToken -> Xified (Either Sigma Perm)
 detokify (P.SigmaPerm ls rs) = Right <$> permify ls rs
 detokify t = Left <$> sigmify t
 
-contextualise' :: P.SigmaToken -> Xified Context
+contextualise' :: P.SigmaToken -> Xified (Sigma, Context)
 contextualise' p =
   do (tokens', perms') <- detokifies
      it' <- sigmify p
      (g, _, m) <- get
      let perms'' = M.unionWith err perms' m
 
-     return Context { it = it'
-                    , tokens = tokens'
-                    , perms = perms''
-                    , eqcls = uniqify perms''
-                    , overture = G.overroot g }
+     return . (it',) $ Context { tokens = tokens'
+                               , perms = perms''
+                               , eqcls = uniqify perms''
+                               , overture = G.overroot g }
   where err = error "anonymous perm conflict"
 
-contextualise :: G.Graph -> P.SigmaToken -> IO Context
+contextualise :: G.Graph -> P.SigmaToken -> IO (Sigma, Context)
 contextualise g p = evalStateT (contextualise' p) (g, [-1,-2..], M.empty)
 
 --- uniqification
