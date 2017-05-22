@@ -1,5 +1,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Sigma
 ( Ref(..)
@@ -96,11 +97,10 @@ sigmify (P.SigmaSeq xs) = SigmaSeq <$> mapM sigmify xs
 sigmify (P.SigmaLabel l) = sigmify (P.SigmaRef l)
 sigmify (P.SigmaRef' r) = withOverture . sigmify $ P.SigmaRef r
 sigmify (P.SigmaRef r) =
-  do g <- getGraph
-     case G.search g r of
-       [] -> liftIO . throwIO $ ReferenceError r
-       (n, P.SigmaPerm _ _) : _ -> return $ SigmaPerm (ByName r) n
-       (n, _) : _ -> return $ SigmaTok r n
+  flip G.search r <$> getGraph >>= \case
+    [] -> liftIO . throwIO $ ReferenceError r
+    (n, P.SigmaPerm _ _) : _ -> return $ SigmaPerm (ByName r) n
+    (n, _) : _ -> return $ SigmaTok r n
 sigmify (P.SigmaPerm ls rs) =
   SigmaPerm Anonymous <$> (permify ls rs >>= insertAnon)
 

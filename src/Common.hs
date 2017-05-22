@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 module Common
 ( module Common
 ) where
@@ -26,6 +28,5 @@ instance E.Exception ReadError where
 
 initlast :: [a] -> Maybe ([a],a)
 initlast = foldr go Nothing
-  where
-    go x Nothing = Just ([],x)
-    go x (Just (is,l)) = Just (x:is,l)
+  where go x Nothing = Just ([],x)
+        go x (Just (is,l)) = Just (x:is,l)
