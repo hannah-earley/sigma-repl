@@ -83,16 +83,18 @@ search :: Graph -> ID -> [(Int, P.SigmaToken)]
 search g r = searchAt g (root g) r
 
 searchAt :: Graph -> Int -> ID -> [(Int, P.SigmaToken)]
-searchAt g n r = reverse . snd $ go (S.empty, []) (n, r)
+searchAt g n r = reverse . snd $ go False (S.empty, []) (n, r)
   where
-    go h@(s,l) q@(n',_)
+    go b h@(s,l) q@(n',_)
       | S.member q s = h
-      | otherwise = go' (S.insert q s) l q . M.lookup n' $ nodes g
+      | otherwise = let s' = if b then S.insert q s else s
+                    in go' b s' l q . M.lookup n' $ nodes g
 
-    go' s l _ Nothing = (s, l)
-    go' s l (n',r') (Just (x,es)) =
+    go' _ s l _ Nothing = (s, l)
+    go' b s l (n',r') (Just (x,es)) =
       let queue = catMaybes . map (query r') $ sort es
-      in foldl go (s, collect n' x ++ l) queue
+          l' = if b then collect n' x ++ l else l
+      in foldl (go True) (s,l') queue
 
     collect n' (Def _ d) = [(n',d)]
     collect _ _ = []

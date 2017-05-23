@@ -15,7 +15,7 @@ type ID = String
 --- reading
 
 data ReadError = LocateError FilePath
-               | ParseError String
+               | ParsingError String
                | IncompleteError String
                | ReferenceError ID
                | InconsistencyError FilePath
@@ -24,7 +24,7 @@ data ReadError = LocateError FilePath
 
 instance E.Exception ReadError where
   displayException (LocateError p) = "Couldn't locate " ++ p
-  displayException (ParseError e) = e
+  displayException (ParsingError e) = e
   displayException (IncompleteError e) = e
   displayException (ReferenceError x) = "Couldn't dereference " ++ x
   displayException (InconsistencyError p) =
@@ -36,10 +36,12 @@ instance E.Exception ReadError where
 data Direction = Up | Down
 
 data Breadcrumb = North | East | South | West
+                deriving (Show)
 
 data EvalError = IncompleteComputation
                | UnificationError String
                | MoveError Breadcrumb
+               deriving (Show)
 
 --- view patterns
 

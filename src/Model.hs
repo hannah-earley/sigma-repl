@@ -16,9 +16,9 @@ import Control.Monad.State
 
 --- sigma zipper
 
-data ZigmaSeq = ZigmaSeq [Sigma] [Sigma]
+data ZigmaSeq = ZigmaSeq [Sigma] [Sigma] deriving (Show)
 
-data Zigma = Zigma [ZigmaSeq] Sigma
+data Zigma = Zigma [ZigmaSeq] Sigma deriving (Show)
 
 back :: Breadcrumb -> Breadcrumb
 back North = South
@@ -104,10 +104,13 @@ locas f = do { c <- get ; putas M.empty ; x <- f
 withMove :: Breadcrumb -> EvalState a -> EvalState a
 withMove b a = move b >> a >>= \x -> move (back b) >> return x
 
+move' :: Breadcrumb -> EvalState Bool
+move' b = do (r,z) <- go' b . it <$> get
+             modify $ \c -> c {it = z}
+             return r
+
 move :: Breadcrumb -> EvalState ()
-move b = do (r,z) <- go' b . it <$> get
-            unless r . throwError $ MoveError b
-            modify $ \c -> c {it = z}
+move b = move' b >>= flip unless (throwError $ MoveError b)
 
 --
 
@@ -139,16 +142,24 @@ eval d = getit >>= \case
 
 evals :: Direction -> [Sigma] -> EvalState ()
 evals _ [] = return ()
-evals Down (p:_) = evals' p evalp
-evals Up (last -> p) = evals' p $ flip evalp
+evals Down (p:_) = evals' p $ evalp Down
+evals Up (last -> p) = evals' p . flip $ evalp Up
 
 evals' :: Sigma -> ([Permite] -> [Permite] -> EvalState ()) -> EvalState ()
 evals' p f = getperm p >>= maybe (return ()) (\(Perm l r) -> f l r)
 
-evalp :: [Permite] -> [Permite] -> EvalState ()
-evalp ls rs = locas $ remguard >> unifies ls
-                               >> mapM substitute rs
-                               >>= putit . SigmaSeq >> deplete
+evalp :: Direction -> [Permite] -> [Permite] -> EvalState ()
+evalp d ls rs = remguard >> locas (unifies ls >> mapM substitute rs
+                                              >>= putit . SigmaSeq)
+                         >> deplete >> eval d
+--
+
+-- evalp d ls rs = locas $ remguard >> get >>= traceM . show
+--                                  >> unifies ls
+--                                  >> get >>= traceM . show
+--                                  >> mapM substitute rs
+--                                  >>= putit . SigmaSeq
+--                                  >> deplete >> eval d
 
 --- unification
 
@@ -167,9 +178,12 @@ unify (PermSeq xs)
 unifies :: [Permite] -> EvalState ()
 unifies [] = getit >>= \case
                SigmaSeq [] -> return ()
+               SigmaSeq _ ->
+                 getit >>= showex >>= throwError . UnificationError .
+                         ("expecting stop, found " ++)
                SigmaTok _ _ -> deref >> unifies []
                SigmaPerm _ _ -> throwError $
-                 UnificationError "expecting sequence, found perm"
+                 UnificationError "expecting stop, found perm"
 unifies ps = withMove South $ unifies' ps
 
 -- unify over a list can't be done with a simple fold because
@@ -178,12 +192,12 @@ unifies ps = withMove South $ unifies' ps
 unifies' :: [Permite] -> EvalState ()
 unifies' (p:ps@(_:_)) =
   do unify p
-     (b,_) <- go' East . it <$> get
+     b <- move' East
      unless b . throwError $ UnificationError "too few arguments"
      unifies' ps
 unifies' [p] =
   do unify p
-     (b,_) <- go' East . it <$> get
+     b <- move' East
      when b . throwError $ UnificationError "too many arguments"
 
 substitute :: Permite -> EvalState Sigma
@@ -207,7 +221,7 @@ requiv x y = do sx <- showex x
                 sy <- showex y
                 b <- equivp x y
                 unless b . throwError . UnificationError $
-                  "Can't unify " ++ sx ++ " with " ++ sy
+                  "Can't unify " ++ (show x) ++ " with " ++ (show y)
 
 equivp :: Sigma -> Sigma -> EvalState Bool
 equivp (SigmaTok _ n) (SigmaTok _ m)

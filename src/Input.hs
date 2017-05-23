@@ -29,8 +29,17 @@ doLoad g f x = do now <- getPOSIXTime
                   let (g'',n'') = stack g' n' (root g)
                   return g'' {root = n''}
 
+loadRaw' :: Graph -> String -> IO Graph
+loadRaw' g = doLoad g fetchResource . rawResource
+
 loadRaw :: Graph -> String -> IO Graph
-loadRaw g = doLoad g fetchResource . rawResource
+loadRaw g s =
+  do now <- getPOSIXTime
+     (g',n') <- fetchResource (g {asof = now}) $ rawResource s
+     let g'' = addEdge g' n' $ Edge (Qualified "") Shadow (root g)
+     return g'' {root = n'}
+    --  let (g'',n'') = stack g' n' (root g)
+    --  return g'' {root = n''}
 
 loadFile :: Graph -> FilePath -> IO Graph
 loadFile g = doLoad g getInheritance
@@ -56,11 +65,11 @@ insertResource g (Resource f r c) =
   let (g',m,n) = addPlaceholder g r f
   in case P.parseResult $ parse P.terms f c of
        P.ParseOK ts -> (,m) <$> applyTerms (g',m,n) ts
-       P.ParseError e -> E.throwIO $ ParseError e
+       P.ParseError e -> E.throwIO $ ParsingError e
        P.ParseIncomplete e ->
          case r of
            Raw _ -> E.throwIO $ IncompleteError e
-           _ -> E.throwIO $ ParseError e
+           _ -> E.throwIO $ ParsingError e
 
 addPlaceholder :: Graph -> ResourceID -> FilePath -> (Graph, Int, Int)
 addPlaceholder g0 r f =
