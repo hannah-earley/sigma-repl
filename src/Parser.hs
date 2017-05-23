@@ -172,7 +172,7 @@ ssugar = sstop <|> sdata <|> snat <|> slist
         slist' (Just x) = flip (foldr co) . (x:) <$> P.many stok
                             >>= (<$> P.option ni (dot >> stok))
 
--- sigma helpers
+--- sigma helpers
 
 manybut :: Parser a -> Parser b -> Parser ([a],b)
 manybut p q = P.try go <|> ([],) <$> q
@@ -196,3 +196,5 @@ pval (a,b) c
   | a == b = guard (a == c) <?> printf "bottom identifier of '%s'" a
   | otherwise = guard (c == a || c == b)
                 <?> printf "bottom identifier of '%s' or '%s'" a b
+
+--- TODO: commands

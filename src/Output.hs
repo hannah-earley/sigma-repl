@@ -26,6 +26,8 @@ class ShowX a x where
 showsx :: ShowX a x => [a] -> State x String
 showsx = fmap unwords . mapM showx
 
+--- TODO: print OHC with supplied wrapper (hl with ANSI codes)
+
 --- core rendering
 
 instance ShowX Perm Context where
