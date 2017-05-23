@@ -221,7 +221,7 @@ requiv x y = do sx <- showex x
                 sy <- showex y
                 b <- equivp x y
                 unless b . throwError . UnificationError $
-                  "Can't unify " ++ (show x) ++ " with " ++ (show y)
+                  "Can't unify " ++ sx ++ " with " ++ sy
 
 equivp :: Sigma -> Sigma -> EvalState Bool
 equivp (SigmaTok _ n) (SigmaTok _ m)
