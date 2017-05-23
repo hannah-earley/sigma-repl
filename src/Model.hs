@@ -67,11 +67,11 @@ type EvalState a = ExceptT EvalError (State EvalCtx) a
 --
 
 remguard :: EvalState ()
-remguard = do b <- (>0) . remaining <$> get
-              unless b $ throwError IncompleteError
+remguard = do c <- remaining <$> get
+              unless (c>0) $ throwError IncompleteComputation
 
 deplete :: EvalState ()
-deplete = remguard >> modify $ \c -> c {remaining = pred $ remaining c}
+deplete = remguard >> modify (\c -> c {remaining = pred $ remaining c})
 
 replete :: ExtendedNat -> EvalState ()
 replete n = modify $ \c -> c {remaining = n}
@@ -111,8 +111,8 @@ move b = do (r,z) <- go' b . it <$> get
 
 --
 
-showx :: ShowX a Context => a -> EvalState String
-showx s = printx s . context <$> get
+showex :: ShowX a Context => a -> EvalState String
+showex s = printx s . context <$> get
 
 --
 
@@ -133,44 +133,24 @@ getperm _ = return Nothing
 
 eval :: Direction -> EvalState ()
 eval d = getit >>= \case
-           SigmaSeq xs -> eval' d xs
+           SigmaSeq xs -> evals d xs
            SigmaTok _ _ -> deref >> eval d
            SigmaPerm _ _ -> return ()
 
-eval' :: Direction -> [Sigma] -> EvalState ()
-eval' Down (p:_) =
-  getperm p >>= \case
-    Just (Perm l r) -> eval'' l r
-    Nothing -> return ()
-eval' Up (initlast -> Just (_,p)) =
-  getperm p >>= \case
-    Just (Perm l r) -> eval'' r l
-    Nothing -> return ()
-eval' _ _ = return ()
+evals :: Direction -> [Sigma] -> EvalState ()
+evals _ [] = return ()
+evals Down (p:_) = evals' p evalp
+evals Up (last -> p) = evals' p $ flip evalp
 
-eval'' :: [Permite] -> [Permite] -> EvalState ()
-eval'' ls rs = do remguard
-                  unifies ls
-                  rs' <- mapM substitute rs
-                  putit $ SigmaSeq rs'
-                  deplete
+evals' :: Sigma -> ([Permite] -> [Permite] -> EvalState ()) -> EvalState ()
+evals' p f = getperm p >>= maybe (return ()) (\(Perm l r) -> f l r)
+
+evalp :: [Permite] -> [Permite] -> EvalState ()
+evalp ls rs = locas $ remguard >> unifies ls
+                               >> mapM substitute rs
+                               >>= putit . SigmaSeq >> deplete
 
 --- unification
-
-unifies :: [Permite] -> EvalState ()
-unifies [] = getit >>= \case
-               SigmaSeq [] -> return ()
-               SigmaTok _ _ -> deref >> unifies []
-               SigmaPerm _ _ -> throwError $
-                 UnificationError "expecting sequence, found perm"
-unifies ps = withMove South $ unifies' ps
-
-unifies' :: [Permite] -> EvalState ()
-unifies' (p:ps@(_:_)) = unify p >> move East >> unifies' ps
-unifies' [p] = do unify p
-                  (b,_) <- go' East . it <$> get
-                  when b . throwError $
-                    UnificationError "too many arguments"
 
 unify :: Permite -> EvalState ()
 unify (PermPerm r n) = getit >>= requiv (SigmaPerm r n)
@@ -181,8 +161,30 @@ unify (PermLabel l) =
 unify (PermSeq xs)
   | termp Down xs = eval Down >> unifies xs
   | termp Up xs   = eval Up >> unifies xs
-  | otherwise     = showx (PermSeq xs) >>= throwError . UnificationError .
+  | otherwise     = showex (PermSeq xs) >>= throwError . UnificationError .
                           ("can't unify non-terminal sequence " ++)
+
+unifies :: [Permite] -> EvalState ()
+unifies [] = getit >>= \case
+               SigmaSeq [] -> return ()
+               SigmaTok _ _ -> deref >> unifies []
+               SigmaPerm _ _ -> throwError $
+                 UnificationError "expecting sequence, found perm"
+unifies ps = withMove South $ unifies' ps
+
+-- unify over a list can't be done with a simple fold because
+-- we must also move about a zipper, and keep track of whether
+-- there are exactly the right number of arguments
+unifies' :: [Permite] -> EvalState ()
+unifies' (p:ps@(_:_)) =
+  do unify p
+     (b,_) <- go' East . it <$> get
+     unless b . throwError $ UnificationError "too few arguments"
+     unifies' ps
+unifies' [p] =
+  do unify p
+     (b,_) <- go' East . it <$> get
+     when b . throwError $ UnificationError "too many arguments"
 
 substitute :: Permite -> EvalState Sigma
 substitute (PermPerm r n) = return $ SigmaPerm r n
@@ -197,12 +199,12 @@ substitute (PermLabel l) =
 termp :: Direction -> [Permite] -> Bool
 termp _ [] = True
 termp Down (PermSeq _ : _) = True
-termp Up (initlast -> Just (_, PermSeq _)) = True
+termp Up (last -> PermSeq _) = True
 termp _ _ = False
 
 requiv :: Sigma -> Sigma -> EvalState ()
-requiv x y = do sx <- showx x
-                sy <- showx y
+requiv x y = do sx <- showex x
+                sy <- showex y
                 b <- equivp x y
                 unless b . throwError . UnificationError $
                   "Can't unify " ++ sx ++ " with " ++ sy

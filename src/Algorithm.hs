@@ -10,6 +10,13 @@ import Data.Foldable (foldl')
 
 --- Deduplication
 
+-- this algorithm (dedup) find equivalence classes over objects
+-- defined by a structural signature (s) and references to other
+-- objects by index (r), iteratively repartitioning the list
+-- by any distinguishing factors, starting with signature
+-- and then by the equivalence class of referred objects,
+-- until convergence
+
 distinguish :: Ord r => Partition (r, [r]) -> Partition (r, [r])
 distinguish = subpartition =<< (. snd) . map . (M.!) . index . pmap fst
 
@@ -56,14 +63,3 @@ converge = (until =<<) . (=<<)
 
 acyclicp :: Ord k => [(n, k, [k])] -> Bool
 acyclicp = all ((<=1) . length . G.flattenSCC) . G.stronglyConnComp
-
---- Lists
-
-shows' :: Show a => [a] -> String
-shows' = unwords . map show
-
-initlast :: [a] -> Maybe ([a],a)
-initlast = foldr go Nothing
-  where
-    go x Nothing = Just ([],x)
-    go x (Just (is,l)) = Just (x:is,l)

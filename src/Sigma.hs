@@ -133,6 +133,20 @@ contextualise' p =
 contextualise :: G.Graph -> P.SigmaToken -> IO (Sigma, Context)
 contextualise g p = evalStateT (contextualise' p) (g, [-1,-2..], M.empty)
 
+--- TODO: could make more efficient by either just doing delta
+---       updates to the context, or by searching from the sigma
+---       for relevant definitions (which should be fairly
+---       straightforward in a State monad), as we have to do
+---       the G.search'es anyway...
+---
+---       this way we won't get a large overhead for evaluating
+---       expressions in a particularly large moduleset
+---
+---       would also be nice to replace Int with a sum type rather
+---       than 0,1,2... vs -1,-2,-3... alternatively we can put an
+---       extra map in the state that maps from Graph Int to Context
+---       Int, and choose a new Int for each anonymous/named perm
+
 --- uniqification
 
 data Sig = Sig [Sigite] [Sigite] deriving (Eq, Ord)
