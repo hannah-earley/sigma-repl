@@ -8,8 +8,10 @@ module Parser
 , terms
 , stok
 , parseResult
+, cmd
 ) where
 
+import Common (ExtendedNat(..))
 import qualified Text.Parsec as P
 import qualified Text.Parsec.Char as C
 import qualified Text.Parsec.Token as T
@@ -69,10 +71,14 @@ parseResult (Right r) = ParseOK r
 parseResult (Left e) = incompletep e $ show e
 
 incompletep :: P.ParseError -> String -> ParseResult a
-incompletep = go . E.errorMessages
-  where go (E.SysUnExpect "" : _) = ParseIncomplete
-        go (_ : xs) = go xs
-        go [] = ParseError
+incompletep = fin . foldl go (False,True) . E.errorMessages
+  where
+    go (_,b) (E.SysUnExpect "") = (True,b)
+    go (a,_) (E.UnExpect _) = (a,False)
+    go ab _ = ab
+
+    fin (True,True) = ParseIncomplete
+    fin _ = ParseError
 
 --- program expressions
 
@@ -87,6 +93,9 @@ data Term = InheritAll FilePath String
 
 terms :: Parser [Term]
 terms = ws >> P.manyTill term P.eof
+
+terms1 :: Parser [Term]
+terms1 = ws >> (:) <$> term >>= (<$> terms)
 
 term :: Parser Term
 term = P.labels (parens ttok) labels
@@ -197,4 +206,48 @@ pval (a,b) c
   | otherwise = guard (c == a || c == b)
                 <?> printf "bottom identifier of '%s' or '%s'" a b
 
---- TODO: commands
+--- commands
+
+data EvalMode = Manual | Automatic deriving (Show)
+
+data Command = LoadFile FilePath
+             | LoadRaw String
+             | Reload
+             | Eval EvalMode SigmaToken
+             | Relimit ExtendedNat
+             | Quit
+             | Noop
+             deriving (Show)
+
+cmd :: Parser Command
+cmd = C.spaces >> (meta <|> P.try eauto <|> lraw <|> noop)
+  where
+    meta = C.char ':'
+              >> (lre <|> lfile <|> lrawmulti <|> eman
+                      <|> relim <|> unlim <|> quit)
+              <?> "meta command"
+
+    lre = C.char 'r' >> return Reload <?> "reload (:r)"
+    lfile = C.char 'l' >> P.many1 C.space
+              >> LoadFile <$> P.many1 C.anyChar
+              <?> "file to load (:l path)"
+    lraw = P.lookAhead terms1 >> LoadRaw <$> P.many C.anyChar
+              <?> "definition set"
+    lrawmulti = do { C.char '{'
+                   ; P.lookAhead (ws >> P.manyTill term eog)
+                   ; LoadRaw <$> P.manyTill C.anyChar (P.try eog)
+                   } <?> "multiline definition set (:{ ... })"
+      where eog = C.char '}' >> C.spaces >> P.eof
+
+    eauto = do { s <- stok ; P.eof ; return $ Eval Automatic s }
+              <?> "sigma expression"
+    eman = C.char 'e' >> ws >> Eval Manual <$> stok
+              <?> "manual evaluation (:e sigma)"
+
+    unlim = C.char 'u' >> return (Relimit Infinite) <?> "unlimit (:u)"
+    relim = C.char 'n' >> C.spaces
+              >> Relimit . Finite . fromIntegral <$> litNat
+              <?> "relimit (:n nat)"
+
+    quit = C.char 'q' >> return Quit <?> "quit (:q)"
+    noop = P.eof >> return Noop

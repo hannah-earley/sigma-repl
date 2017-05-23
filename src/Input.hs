@@ -19,6 +19,8 @@ import qualified Data.Map as M
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (withCurrentDirectory)
 
+-- could be improved with State...
+
 --- file graphing
 
 doLoad :: Graph -> (Graph -> a -> IO (Graph, Int)) -> a -> IO Graph
