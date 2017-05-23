@@ -1,6 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main where
 
@@ -12,13 +12,13 @@ import Output (printx)
 import Overture (overture)
 import Parser ( cmd , parseResult , Command(..)
               , EvalMode(..) , ParseResult(..) )
+import qualified Parser as P
 import Sigma (contextualise)
 
 import qualified Data.Map.Lazy as M
 import Text.Parsec (parse)
 
 import Control.Monad (void)
--- import Control.Monad.IO.Class
 import Control.Monad.State.Strict
 import qualified Control.Monad.State.Lazy as SL
 import Control.Monad.Trans (lift)
@@ -60,20 +60,27 @@ hl s = "\ESC[36;1m" ++ s ++ "\ESC[0m"
 
 --- initiation
 
+loadHandler :: String -> Graph -> ReadError -> IO (Graph,Bool)
+loadHandler p g e =
+  do putStrLn $ "Error loading module" ++ p ++ ":"
+     putStrLn $ unlines . map (" >>> " ++)
+              . lines $ displayException e
+     return (g,False)
+
+loadFun :: String -> (Graph -> IO Graph) -> EnvIO' Bool
+loadFun p f = do g <- graph <$> get
+                 (g',b) <- liftIO $ catch ((,True) <$> f g)
+                                          (loadHandler p g)
+                 liftIO . contextualise g' $ P.SigmaSeq []
+                 modify $ \e -> e {graph = g'}
+                 return b
+
 load :: FilePath -> EnvIO' Bool
-load f = do g <- graph <$> get
-            (g',b) <- liftIO $
-              catch ((,True) <$> loadFile g f
-                             <* putStrLn ("Loaded: " ++ f))
-                    (handler g)
-            modify $ \e -> e {graph = g'}
-            return b
-  where
-    handler g (e :: ReadError) =
-      do putStrLn $ "Error loading module " ++ f ++ ":"
-         putStrLn $ unlines . map (" >>> " ++)
-                  . lines $ displayException e
-         return (g,False)
+load f = loadFun (' ':f) $
+            \g -> loadFile g f <* putStrLn ("Loaded: " ++ f)
+
+loadr :: String -> EnvIO' Bool
+loadr s = loadFun "" $ \g -> loadRaw g s
 
 loads :: [FilePath] -> EnvIO' ()
 loads [] = return ()
@@ -111,9 +118,7 @@ switch Quit = error "bye."
 switch Noop = return ()
 
 switch (LoadFile f) = void $ load f
-switch (LoadRaw s) = do g <- graph <$> get
-                        g' <- liftIO $ loadRaw g s
-                        modify $ \e -> e {graph = g'}
+switch (LoadRaw s) = void $ loadr s
 switch Reload = liftIO $ putStrLn "not implemented."
 
 switch (Relimit n) = modify $ \e -> e {limit = n}
@@ -123,7 +128,6 @@ switch (Eval m s) = do Env g l <- get
                                        , context = c
                                        , assignments = M.empty
                                        , it = tozip it' }
-                      --  liftIO $ putStrLn $ show c
                        case m of
                          Manual -> explore e
                          Automatic -> run e
