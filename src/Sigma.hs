@@ -115,7 +115,13 @@ detokifies =
 
 detokify :: P.SigmaToken -> Xified (Either Sigma Perm)
 detokify (P.SigmaPerm ls rs) = Right <$> permify ls rs
+detokify (P.SigmaRef r) = refCycleErr r
+detokify (P.SigmaRef' r) = refCycleErr r
+detokify (P.SigmaLabel r) = refCycleErr r
 detokify t = Left <$> sigmify t
+
+refCycleErr r = liftIO . throwIO . OtherError $
+  "Illegal attempt to define alias to " ++ r
 
 contextualise' :: P.SigmaToken -> Xified (Sigma, Context)
 contextualise' p =

@@ -23,26 +23,19 @@ import System.Directory (withCurrentDirectory)
 
 --- file graphing
 
-doLoad :: Graph -> (Graph -> a -> IO (Graph, Int)) -> a -> IO Graph
-doLoad g f x = do now <- getPOSIXTime
-                  (g',n') <- f (g {asof = now}) x
-                  let (g'',n'') = stack g' n' (root g)
-                  return g'' {root = n''}
-
-loadRaw' :: Graph -> String -> IO Graph
-loadRaw' g = doLoad g fetchResource . rawResource
-
 loadRaw :: Graph -> String -> IO Graph
 loadRaw g s =
   do now <- getPOSIXTime
      (g',n') <- fetchResource (g {asof = now}) $ rawResource s
      let g'' = addEdge g' n' $ Edge (Qualified "") Shadow (root g)
      return g'' {root = n'}
-    --  let (g'',n'') = stack g' n' (root g)
-    --  return g'' {root = n''}
 
 loadFile :: Graph -> FilePath -> IO Graph
-loadFile g = doLoad g getInheritance
+loadFile g f =
+  do now <- getPOSIXTime
+     (g',n') <- getInheritance (g {asof = now}) f
+     let (g'',n'') = stack g' n' (root g)
+     return g'' {root = n''}
 
 loadFiles :: Graph -> [FilePath] -> IO Graph
 loadFiles = foldM loadFile
