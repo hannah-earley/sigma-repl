@@ -4,6 +4,8 @@ module Parser
 ( Term(..)
 , SigmaToken(..)
 , ParseResult(..)
+, Command(..)
+, EvalMode(..)
 , term
 , terms
 , stok
@@ -229,12 +231,13 @@ cmd = C.spaces >> (meta <|> P.try eauto <|> lraw <|> noop)
 
     lre = C.char 'r' >> return Reload <?> "reload (:r)"
     lfile = C.char 'l' >> P.many1 C.space
-              >> LoadFile <$> P.many1 C.anyChar
+              >> LoadFile . rstrip <$> P.many1 C.anyChar
               <?> "file to load (:l path)"
+      where rstrip = reverse . dropWhile isSpace . reverse
     lraw = P.lookAhead terms1 >> LoadRaw <$> P.many C.anyChar
               <?> "definition set"
     lrawmulti = do { C.char '{'
-                   ; P.lookAhead (ws >> P.manyTill term eog)
+                   ; P.lookAhead $ ws >> P.manyTill term eog
                    ; LoadRaw <$> P.manyTill C.anyChar (P.try eog)
                    } <?> "multiline definition set (:{ ... })"
       where eog = C.char '}' >> C.spaces >> P.eof
