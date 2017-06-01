@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
-
 module Common
 ( module Common
 ) where

@@ -212,7 +212,7 @@ runkey _ _ = return ()
 --- evaluation
 
 showit :: EvalCtx -> String
-showit = liftM2 (flip showz hl) it context
+showit = liftM2 (`showz` hl) it context
 
 explore :: EvalCtx -> EnvIO' ()
 explore e = limit <$> get >>= \lim -> liftIO $
