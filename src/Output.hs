@@ -6,6 +6,7 @@
 module Output
 ( printx
 , ShowX
+, showx
 ) where
 
 import Sigma

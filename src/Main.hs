@@ -7,8 +7,8 @@ module Main where
 import Common
 import Graph (Graph)
 import Input (loadFile, loadRaw)
-import Model (eval, EvalCtx(..), tozip, fromzip)
-import Output (printx)
+import Model (eval, EvalCtx(..), tozip, showz)
+import qualified Model as Mod
 import Overture (overture)
 import Parser ( cmd , parseResult , Command(..)
               , EvalMode(..) , ParseResult(..) )
@@ -130,7 +130,7 @@ switch (Eval m s) = do Env g l <- get
                                        , it = tozip it' }
                        case m of
                          Manual -> explore e
-                         Automatic -> run e
+                         Automatic -> run e Up >> run e Down
 
 --- input
 
@@ -153,17 +153,89 @@ getInputCmd' pr prefix = getInputLine pr >>= \case
 runCmd :: String -> ParseResult Command
 runCmd = parseResult . parse cmd "(input)"
 
+getQuantified :: IO (String, Int)
+getQuantified = fmap (\case {"" -> 1; n -> read n}) <$> (go =<< getKey)
+  where go [n] | '0' <= n && n <= '9' =
+          fmap (n:) <$> (go =<< getKey)
+        go a = return (a, "")
+
+normkey :: String -> String
+-- arrows
+normkey "\ESC[D" = "h"
+normkey "\ESC[B" = "j"
+normkey "\ESC[A" = "k"
+normkey "\ESC[C" = "l"
+-- shift-arrows
+normkey "\ESC[1;2D" = "a"
+normkey "\ESC[1;2B" = "s"
+normkey "\ESC[1;2A" = "w"
+normkey "\ESC[1;2C" = "d"
+-- fn-arrows
+normkey "\ESCa" = "H"
+normkey "\ESC[6~" = "J"
+normkey "\ESC[5~" = "K"
+normkey "\ESCe" = "L"
+-- other
+normkey "\ESC" = "q"
+normkey "\EOT" = "q"
+normkey k = k
+
+moven :: Int -> Breadcrumb -> Mod.EvalState ()
+moven 0 _ = return ()
+moven n b = Mod.move' b >>= \case True -> moven (n-1) b
+                                  False -> return ()
+
+movend :: Breadcrumb -> Mod.EvalState ()
+movend b = do z <- Mod.goend b . it <$> get
+              modify $ \c -> c {it = z}
+
+runkey :: Int -> String -> Mod.EvalState ()
+runkey 0 _ = return ()
+-- move by n
+runkey n "h" = moven n West
+runkey n "j" = moven n South
+runkey n "k" = moven n North
+runkey n "l" = moven n East
+-- move to end
+runkey _ "H" = movend West
+runkey _ "J" = movend South
+runkey _ "K" = movend North
+runkey _ "L" = movend East
+-- evaluate
+runkey n "a" = Mod.replete (fromIntegral n) >> eval Up
+runkey _ "w" = eval Up
+runkey _ "s" = eval Down
+runkey n "d" = Mod.replete (fromIntegral n) >> eval Down
+--
+runkey _ _ = return ()
+
 --- evaluation
 
-explore :: EvalCtx -> EnvIO' ()
-explore = run
+showit :: EvalCtx -> String
+showit = liftM2 (flip showz hl) it context
 
-run :: EvalCtx -> EnvIO' ()
-run e = let (r,e') = SL.runState (runExceptT $ eval Down) e
-        in liftIO $ do case r of
-                         Left (UnificationError s) -> putStrLn $
-                           " >>> Unification Error: " ++ s
-                         Left (MoveError c) -> putStrLn $
-                           " >>> Structural Error (" ++ show c ++ ")"
-                         _ -> return ()
-                       putStrLn $ printx (fromzip $ it e') (context e')
+explore :: EvalCtx -> EnvIO' ()
+explore e = limit <$> get >>= \lim -> liftIO $
+      putStrLn (showit e) >> withHiddenTerminalInput (explore' e lim)
+
+explore' :: EvalCtx -> ExtendedNat -> IO ()
+explore' e l =
+  do (k,n) <- getQuantified
+     case normkey k of
+       "q" -> return ()
+       k' -> runSafe e (Mod.replete l >> runkey n k') >>= flip explore' l
+
+run :: EvalCtx -> Direction -> EnvIO' ()
+run e b = void . liftIO . runSafe e $ eval b
+
+runSafe :: EvalCtx -> Mod.EvalState a -> IO EvalCtx
+runSafe e x =
+  do let (r,e') = SL.runState (runExceptT x) e
+     case r of
+       Left (UnificationError s) -> putStrLn $
+         " >>> Unification Error: " ++ s
+       Left (MoveError c) -> putStrLn $
+         " >>> Structural Error (" ++ show c ++ ")"
+       _ -> return ()
+     putStrLn $ showit e'
+     return e'
