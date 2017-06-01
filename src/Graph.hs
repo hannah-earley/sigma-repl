@@ -8,8 +8,8 @@ import Common (ID)
 import Resource (ResourceID)
 import qualified Parser as P
 
-import Control.Monad (guard)
-import Data.Maybe (catMaybes)
+import Control.Monad (guard, ap)
+import Data.Maybe (mapMaybe)
 import Data.List (sort, stripPrefix)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -80,7 +80,7 @@ reroot :: Graph -> Int -> Graph
 reroot g r = g { root = r }
 
 search :: Graph -> ID -> [(Int, P.SigmaToken)]
-search g r = searchAt g (root g) r
+search = ap searchAt root
 
 searchAt :: Graph -> Int -> ID -> [(Int, P.SigmaToken)]
 searchAt g n r = reverse $ snd switch
@@ -96,7 +96,7 @@ searchAt g n r = reverse $ snd switch
     --
     --  2) otherwise, search upwards _without_ marking the leaf
     --     as seen so that we retain the option of matching it
-    --     under an exported name 
+    --     under an exported name
     switch = case M.lookup n $ nodes g of
                x@(Just (Def r' _, es)) ->
                  if r == r'
@@ -111,7 +111,7 @@ searchAt g n r = reverse $ snd switch
     go' h _ Nothing = h
     go' h (n',r') (Just (x,es)) = gos ((collect n' x ++) <$> h) r' es
 
-    gos h r' es = foldl go h . catMaybes . map (query r') $ sort es
+    gos h r' es = foldl go h . mapMaybe (query r') $ sort es
 
     collect n' (Def _ d) = [(n',d)]
     collect _ _ = []
@@ -123,6 +123,6 @@ get :: Graph -> Int -> Maybe P.SigmaToken
 get g n = do { (Def _ s, _) <- M.lookup n $ nodes g ; return s }
 
 defs :: Graph -> [(Int, P.SigmaToken)]
-defs = catMaybes . map f . M.toList . nodes
+defs = mapMaybe f . M.toList . nodes
   where f (n, (Def _ t, _)) = Just (n, t)
         f _ = Nothing

@@ -114,6 +114,6 @@ showdatn :: Int -> Permite -> State Context String
 showdatn n x@(PermSeq x') =
   getdat x' >>= \case
     Right (DatSucc m) -> showdatn (n+1) m
-    Right (DatZero) -> return $ show n
-    _ -> ((++) $ "{#" ++ show n ++ " . ") . (++ "}") <$> showx x
-showdatn n x = ((++) $ "{#" ++ show n ++ " . ") . (++ "}") <$> showx x
+    Right DatZero -> return $ show n
+    _ -> (++) ("{#" ++ show n ++ " . ") . (++ "}") <$> showx x
+showdatn n x = (++) ("{#" ++ show n ++ " . ") . (++ "}") <$> showx x
