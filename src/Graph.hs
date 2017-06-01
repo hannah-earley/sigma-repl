@@ -83,18 +83,35 @@ search :: Graph -> ID -> [(Int, P.SigmaToken)]
 search g r = searchAt g (root g) r
 
 searchAt :: Graph -> Int -> ID -> [(Int, P.SigmaToken)]
-searchAt g n r = reverse . snd $ go False (S.empty, []) (n, r)
+searchAt g n r = reverse $ snd switch
   where
-    go b h@(s,l) q@(n',_)
-      | S.member q s = h
-      | otherwise = let s' = if b then S.insert q s else s
-                    in go' b s' l q . M.lookup n' $ nodes g
+    -- because we can reach a definition/leaf node by many different
+    -- names (depending on edges), we should usually always return
+    -- leaves as solutions; however, if we start searching _from_
+    -- a leaf then it would be incorrect to always return the leaf,
+    -- so we need to do two things instead at the beginning:
+    --
+    --  1) check if the leaf's internal name matches r, if so
+    --     then it is a local solution => return
+    --
+    --  2) otherwise, search upwards _without_ marking the leaf
+    --     as seen so that we retain the option of matching it
+    --     under an exported name 
+    switch = case M.lookup n $ nodes g of
+               x@(Just (Def r' _, es)) ->
+                 if r == r'
+                   then go' (S.empty,[]) (n,r) x
+                   else gos (S.empty,[]) r es
+               _ -> go (S.empty,[]) (n,r)
 
-    go' _ s l _ Nothing = (s, l)
-    go' b s l (n',r') (Just (x,es)) =
-      let queue = catMaybes . map (query r') $ sort es
-          l' = if b then collect n' x ++ l else l
-      in foldl (go True) (s,l') queue
+    go h@(s,l) q@(n',_)
+      | S.member q s = h
+      | otherwise = go' (S.insert q s, l) q . M.lookup n' $ nodes g
+
+    go' h _ Nothing = h
+    go' h (n',r') (Just (x,es)) = gos ((collect n' x ++) <$> h) r' es
+
+    gos h r' es = foldl go h . catMaybes . map (query r') $ sort es
 
     collect n' (Def _ d) = [(n',d)]
     collect _ _ = []
