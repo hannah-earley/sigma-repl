@@ -9,7 +9,7 @@ module Model
 
 import Sigma
 import Common
-import Output (printx, ShowX)
+import Output (printx, ShowX, showx)
 import qualified Data.Map.Lazy as M
 import Control.Monad.Except
 import Control.Monad.State
@@ -19,6 +19,13 @@ import Control.Monad.State
 data ZigmaSeq = ZigmaSeq [Sigma] [Sigma] deriving (Show)
 
 data Zigma = Zigma [ZigmaSeq] Sigma deriving (Show)
+
+showz :: Zigma -> (String -> String) -> Context -> String
+showz (Zigma zs s) hl =
+  evalState $ showx s >>= showx . fromzip . Zigma zs
+                                . flip SigmaTok 0 . hl
+
+--- sigma zipper manipulation
 
 back :: Breadcrumb -> Breadcrumb
 back North = South
