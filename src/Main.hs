@@ -118,7 +118,9 @@ switch Quit = error "bye."
 switch Noop = return ()
 
 switch (LoadFile f) = void $ load f
-switch (LoadRaw s) = void $ loadr s
+ -- add (beq*) statement for intuition that things defined on repl
+ -- should always be readily accessible, not default shadowed...
+switch (LoadRaw s) = void $ loadr $ "(beq*)" ++ s
 switch Reload = liftIO $ putStrLn "not implemented."
 
 switch (Relimit n) = modify $ \e -> e {limit = n}
